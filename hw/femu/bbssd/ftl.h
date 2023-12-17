@@ -7,21 +7,39 @@
 #define INVALID_LPN     (~(0ULL))
 #define UNMAPPED_PPA    (~(0ULL))
 
+/* NAND cell type */
+enum {
+    SLC_NAND = 0,
+    MLC_NAND = 1,
+    TLC_NAND = 2,
+    QLC_NAND = 3,
+};
+
+/* Operation */
 enum {
     NAND_READ =  0,
     NAND_WRITE = 1,
     NAND_ERASE = 2,
-
-    NAND_READ_LATENCY = 40000,
-    NAND_PROG_LATENCY = 200000,
-    NAND_ERASE_LATENCY = 2000000,
 };
 
+/* Operation Latency */
+enum {
+    SLC_NAND_READ_LATENCY = 40000,
+    SLC_NAND_PROG_LATENCY = 200000,
+    SLC_NAND_ERASE_LATENCY = 2000000,
+
+    QLC_NAND_READ_LATENCY = 40000,
+    QLC_NAND_PROG_LATENCY = 200000,
+    QLC_NAND_ERASE_LATENCY = 2000000,
+};
+
+/* IO source */
 enum {
     USER_IO = 0,
     GC_IO = 1,
 };
 
+/* NAND STATE */
 enum {
     SEC_FREE = 0,
     SEC_INVALID = 1,
@@ -194,14 +212,21 @@ struct nand_cmd {
     int64_t stime; /* Coperd: request arrival time */
 };
 
-struct ssd {
-    char *ssdname;
+/* different regions may consist of different NAND media */
+struct ssd_region {
     struct ssdparams sp;
     struct ssd_channel *ch;
-    struct ppa *maptbl; /* page level mapping table */
-    uint64_t *rmap;     /* reverse mapptbl, assume it's stored in OOB */
     struct write_pointer wp;
     struct line_mgmt lm;
+};
+
+struct ssd {
+    char *ssdname;
+    struct ppa *maptbl; /* page level mapping table */
+    uint64_t *rmap;     /* reverse mapptbl, assume it's stored in OOB */
+    
+    struct ssd_region slc;
+    struct ssd_region qlc;
 
     /* lockless ring for communication with NVMe IO thread */
     struct rte_ring **to_ftl;

@@ -419,14 +419,14 @@ static inline bool mapped_ppa(struct ppa *ppa)
     return !(ppa->ppa == UNMAPPED_PPA);
 }
 
-static inline struct ssd_channel *get_ch(struct ssd *ssd, struct ppa *ppa)
+static inline struct ssd_channel *get_ch(struct ssd_region *region, struct ppa *ppa)
 {
-    return &(ssd->ch[ppa->g.ch]);
+    return &(region->ch[ppa->g.ch]);
 }
 
-static inline struct nand_lun *get_lun(struct ssd *ssd, struct ppa *ppa)
+static inline struct nand_lun *get_lun(struct ssd_region *region, struct ppa *ppa)
 {
-    struct ssd_channel *ch = get_ch(ssd, ppa);
+    struct ssd_channel *ch = get_ch(region, ppa);
     return &(ch->lun[ppa->g.lun]);
 }
 
@@ -453,15 +453,15 @@ static inline struct nand_page *get_pg(struct ssd *ssd, struct ppa *ppa)
     return &(blk->pg[ppa->g.pg]);
 }
 
-static uint64_t ssd_advance_status(struct ssd *ssd, struct ppa *ppa, struct
+static uint64_t ssd_advance_status(struct ssd_region *region, struct ppa *ppa, struct
         nand_cmd *ncmd)
 {
     int c = ncmd->cmd;
     uint64_t cmd_stime = (ncmd->stime == 0) ? \
         qemu_clock_get_ns(QEMU_CLOCK_REALTIME) : ncmd->stime;
     uint64_t nand_stime;
-    struct ssdparams *spp = &ssd->sp;
-    struct nand_lun *lun = get_lun(ssd, ppa);
+    struct ssdparams *spp = &region->sp;
+    struct nand_lun *lun = get_lun(region, ppa);
     uint64_t lat = 0;
 
     switch (c) {
@@ -614,15 +614,15 @@ static void mark_block_free(struct ssd *ssd, struct ppa *ppa)
     blk->erase_cnt++;
 }
 
-static void gc_read_page(struct ssd *ssd, struct ppa *ppa)
+static void gc_read_page(struct ssd_region *region, struct ppa *ppa)
 {
     /* advance ssd status, we don't care about how long it takes */
-    if (ssd->sp.enable_gc_delay) {
+    if (region->sp.enable_gc_delay) {
         struct nand_cmd gcr;
         gcr.type = GC_IO;
         gcr.cmd = NAND_READ;
         gcr.stime = 0;
-        ssd_advance_status(ssd, ppa, &gcr);
+        ssd_advance_status(region, ppa, &gcr);
     }
 }
 
@@ -665,9 +665,9 @@ static uint64_t gc_write_page(struct ssd *ssd, struct ppa *old_ppa)
     return 0;
 }
 
-static struct line *select_victim_line(struct ssd *ssd, bool force)
+static struct line *select_victim_line(struct ssd_region *region, bool force)
 {
-    struct line_mgmt *lm = &ssd->lm;
+    struct line_mgmt *lm = &region->lm;
     struct line *victim_line = NULL;
 
     victim_line = pqueue_peek(lm->victim_line_pq);
@@ -675,7 +675,7 @@ static struct line *select_victim_line(struct ssd *ssd, bool force)
         return NULL;
     }
 
-    if (!force && victim_line->ipc < ssd->sp.pgs_per_line / 8) {
+    if (!force && victim_line->ipc < region->sp.pgs_per_line / 8) {
         return NULL;
     }
 
@@ -688,21 +688,21 @@ static struct line *select_victim_line(struct ssd *ssd, bool force)
 }
 
 /* here ppa identifies the block we want to clean */
-static void clean_one_block(struct ssd *ssd, struct ppa *ppa)
+static void clean_one_block(struct ssd_region *region, struct ppa *ppa)
 {
-    struct ssdparams *spp = &ssd->sp;
+    struct ssdparams *spp = &region->sp;
     struct nand_page *pg_iter = NULL;
     int cnt = 0;
 
     for (int pg = 0; pg < spp->pgs_per_blk; pg++) {
         ppa->g.pg = pg;
-        pg_iter = get_pg(ssd, ppa);
+        pg_iter = get_pg(region, ppa);
         /* there shouldn't be any free page in victim blocks */
         ftl_assert(pg_iter->status != PG_FREE);
         if (pg_iter->status == PG_VALID) {
-            gc_read_page(ssd, ppa);
+            gc_read_page(region, ppa);
             /* delay the maptbl update until "write" happens */
-            gc_write_page(ssd, ppa);
+            gc_write_page(region, ppa);
             cnt++;
         }
     }
@@ -721,15 +721,24 @@ static void mark_line_free(struct ssd *ssd, struct ppa *ppa)
     lm->free_line_cnt++;
 }
 
-static int do_gc(struct ssd *ssd, bool force)
+static int do_gc(struct ssd *ssd, bool force, int gc_mode)
 {
     struct line *victim_line = NULL;
     struct ssdparams *spp = &ssd->sp;
     struct nand_lun *lunp;
     struct ppa ppa;
     int ch, lun;
-
-    victim_line = select_victim_line(ssd, force);
+    switch (gc_mode) {
+        case GC_SLC_TO_QLC:
+            victim_line = select_victim_line(ssd->slc, force);
+            break;
+        case GC_QLC:
+            victim_line = select_victim_line(ssd->qlc, force);
+            break;
+        default:
+            ftl_err("FTL received unknown gc type, ERROR\n");
+    }
+  
     if (!victim_line) {
         return -1;
     }
@@ -745,9 +754,9 @@ static int do_gc(struct ssd *ssd, bool force)
             ppa.g.ch = ch;
             ppa.g.lun = lun;
             ppa.g.pl = 0;
-            lunp = get_lun(ssd, &ppa);
-            clean_one_block(ssd, &ppa);
-            mark_block_free(ssd, &ppa);
+            lunp = get_lun(ssd->qlc, &ppa);
+            clean_one_block(ssd->qlc, &ppa);
+            mark_block_free(ssd->qlc, &ppa);
 
             if (spp->enable_gc_delay) {
                 struct nand_cmd gce;
@@ -821,7 +830,7 @@ static uint64_t ssd_write(struct ssd *ssd, NvmeRequest *req)
 
     while (should_gc_high(ssd)) {
         /* perform GC here until !should_gc(ssd) */
-        r = do_gc(ssd, true);
+        r = do_gc(ssd, true, GC_SLC_TO_QLC);
         if (r == -1)
             break;
     }
