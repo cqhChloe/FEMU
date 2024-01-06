@@ -7,6 +7,8 @@
 #define INVALID_LPN     (~(0ULL))
 #define UNMAPPED_PPA    (~(0ULL))
 
+#define SSD_SIZE_MB (2048)
+
 /* NAND cell type */
 enum {
     SLC_NAND = 0,

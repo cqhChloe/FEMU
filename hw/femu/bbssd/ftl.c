@@ -234,10 +234,9 @@ static void check_params(struct ssdparams *spp)
     //ftl_assert(is_power_of_2(spp->nchs));
 }
 
-static void ssd_init_params(struct ssdparams *spp, int init_region)
+static void ssd_init_params(struct ssdparams *spp, int nand_type)
 {
-
-    if (init_region == 0) {
+    if (nand_type == SLC_NAND) {
         spp->secsz = 512;
         spp->secs_per_pg = 8;
         spp->pgs_per_blk = 256;
@@ -250,7 +249,7 @@ static void ssd_init_params(struct ssdparams *spp, int init_region)
         spp->pg_wr_lat = SLC_NAND_PROG_LATENCY;
         spp->blk_er_lat = SLC_NAND_ERASE_LATENCY;
         spp->ch_xfer_lat = 0;        
-    } else if (init_region == 1) {
+    } else if (nand_type == QLC_NAND) {
         spp->secsz = 512;
         spp->secs_per_pg = 8;
         spp->pgs_per_blk = 256;
@@ -360,37 +359,18 @@ static void ssd_init_ch(struct ssd_channel *ch, struct ssdparams *spp)
 
 static void ssd_init_maptbl(struct ssd *ssd)
 {
-    // struct ssdparams *slc_spp = &ssd->sp;
+    uint32_t tt_entries = (SSD_SIZE_MB * 1024) / (4);
 
-    // ssd->maptbl = g_malloc0(sizeof(struct ppa) * spp->tt_pgs);
-    // for (int i = 0; i < spp->tt_pgs; i++) {
-    //     ssd->maptbl[i].ppa = UNMAPPED_PPA;
-    // }
-    struct ssd_region *slc = ssd->slc;
-    struct ssd_region *qlc = ssd->qlc;
-    struct ssdparams *slc_spp = &slc->sp;
-    struct ssdparams *qlc_spp = &qlc->sp;
-
-    ssd->maptbl = g_malloc0(sizeof(struct ppa) * slc_spp->tt_pgs);
-    for (int i = 0; i < slc_spp->tt_pgs; i++) {
+    ssd->maptbl = g_malloc0(sizeof(struct ppa) * tt_entries);
+    for (int i = 0; i < tt_entries; i++) {
         ssd->maptbl[i].ppa = UNMAPPED_PPA;
-    }
+    }  
 
-    ssd->maptbl = g_malloc0(sizeof(struct ppa) * qlc_spp->tt_pgs);
-    for (int i = 0; i < qlc_spp->tt_pgs; i++) {
-        ssd->maptbl[i].ppa = UNMAPPED_PPA;
-    }    
-
+    return;
 }
 
 static void ssd_init_rmap(struct ssd *ssd)
 {
-    // struct ssdparams *spp = &ssd->sp;
-
-    // ssd->rmap = g_malloc0(sizeof(uint64_t) * spp->tt_pgs);
-    // for (int i = 0; i < spp->tt_pgs; i++) {
-    //     ssd->rmap[i] = INVALID_LPN;
-    // }
     struct ssd_region *slc = ssd->slc;
     struct ssdparams *slc_spp = &slc->sp;
 
@@ -411,17 +391,30 @@ static void ssd_init_rmap(struct ssd *ssd)
 void ssd_init(FemuCtrl *n)
 {
     struct ssd *ssd = n->ssd;
-    struct ssd_region *slc = ssd->slc;
-    struct ssd_region *qlc = ssd->qlc;
+    struct ssd_region *slc = NULL;
+    struct ssd_region *qlc = NULL;
+
+    /* 分配SLC和QLC结构体空间 */
+    if (ssd->slc == NULL)
+    {
+        ssd->slc = g_malloc0(sizeof(struct ssd_region));
+    }
+    if (ssd->qlc == NULL)
+    {
+        ssd->qlc = g_malloc0(sizeof(struct ssd_region));
+    }
+
+    slc = ssd->slc;
+    qlc = ssd->qlc;    
+
     struct ssdparams *slc_spp = &slc->sp;
     struct ssdparams *qlc_spp = &qlc->sp;
-    int slc_init = 0;
-    int qlc_init = 1;
 
     ftl_assert(ssd);
 
-    ssd_init_params(slc_spp, slc_init);
-    ssd_init_params(qlc_spp, qlc_init);
+
+    ssd_init_params(slc_spp, SLC_NAND);
+    ssd_init_params(qlc_spp, QLC_NAND);
 
     /* initialize ssd internal layout architecture */
     slc->ch = g_malloc0(sizeof(struct ssd_channel) * slc_spp->nchs);
