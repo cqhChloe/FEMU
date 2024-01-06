@@ -62,6 +62,10 @@ enum {
     FEMU_DISABLE_LOG = 7,
 };
 
+enum {
+    GC_SLC_TO_QLC = 1,
+    GC_QLC = 2,
+};
 
 #define BLK_BITS    (16)
 #define PG_BITS     (16)
@@ -218,15 +222,14 @@ struct ssd_region {
     struct ssd_channel *ch;
     struct write_pointer wp;
     struct line_mgmt lm;
+    uint64_t *rmap;     /* reverse mapptbl, assume it's stored in OOB */
 };
 
 struct ssd {
     char *ssdname;
+    struct ssd_region *slc;
+    struct ssd_region *qlc;
     struct ppa *maptbl; /* page level mapping table */
-    uint64_t *rmap;     /* reverse mapptbl, assume it's stored in OOB */
-    
-    struct ssd_region slc;
-    struct ssd_region qlc;
 
     /* lockless ring for communication with NVMe IO thread */
     struct rte_ring **to_ftl;
