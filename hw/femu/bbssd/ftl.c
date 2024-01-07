@@ -359,13 +359,11 @@ static void ssd_init_ch(struct ssd_channel *ch, struct ssdparams *spp)
 
 static void ssd_init_maptbl(struct ssd *ssd)
 {
-    uint32_t tt_entries = (SSD_SIZE_MB * 1024) / (4);
-
-    ssd->maptbl = g_malloc0(sizeof(struct ppa) * tt_entries);
-    for (int i = 0; i < tt_entries; i++) {
+    ssd->maptbl = g_malloc0(sizeof(struct ppa) * TT_LPNS);
+    for (int i = 0; i < TT_LPNS; i++) {
         ssd->maptbl[i].ppa = UNMAPPED_PPA;
-    }  
-
+    }
+    
     return;
 }
 
@@ -415,6 +413,8 @@ void ssd_init(FemuCtrl *n)
 
     ssd_init_params(slc_spp, SLC_NAND);
     ssd_init_params(qlc_spp, QLC_NAND);
+
+
 
     /* initialize ssd internal layout architecture */
     slc->ch = g_malloc0(sizeof(struct ssd_channel) * slc_spp->nchs);

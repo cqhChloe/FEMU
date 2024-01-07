@@ -13,6 +13,7 @@ static void bb_init_ctrl_str(FemuCtrl *n)
 /* bb <=> black-box */
 static void bb_init(FemuCtrl *n, Error **errp)
 {
+    // 分配ssd结构体的空间
     struct ssd *ssd = n->ssd = g_malloc0(sizeof(struct ssd));
 
     bb_init_ctrl_str(n);
@@ -79,6 +80,11 @@ static void bb_flip(FemuCtrl *n, NvmeCmd *cmd)
         n->print_log = false;
         femu_log("%s,Log print [Disabled]!\n", n->devname);
         break;
+
+    case FEMU_SHOW_CONFIG:
+        show_ssd_config(n->ssd);
+        break;
+    
     default:
         printf("FEMU:%s,Not implemented flip cmd (%lu)\n", n->devname, cdw10);
     }

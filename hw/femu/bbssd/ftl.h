@@ -7,10 +7,11 @@
 #define INVALID_LPN     (~(0ULL))
 #define UNMAPPED_PPA    (~(0ULL))
 
-#define SSD_SIZE_MB (2048)
+#define SSD_SIZE_MB (2048)  // SSD的逻辑空间大小，单位：MB（决定了映射表的大小）
+#define TT_LPNS     ((SSD_SIZE_MB) * (1024 / 4))
 
 /* NAND cell type */
-enum {
+enum NAND_CELL_TYPE{
     SLC_NAND = 0,
     MLC_NAND = 1,
     TLC_NAND = 2,
@@ -18,14 +19,14 @@ enum {
 };
 
 /* Operation */
-enum {
+enum NAND_OP {
     NAND_READ =  0,
     NAND_WRITE = 1,
     NAND_ERASE = 2,
 };
 
 /* Operation Latency */
-enum {
+enum NAND_OP_LATS {
     SLC_NAND_READ_LATENCY = 40000,
     SLC_NAND_PROG_LATENCY = 200000,
     SLC_NAND_ERASE_LATENCY = 2000000,
@@ -263,5 +264,10 @@ void ssd_init(FemuCtrl *n);
 #else
 #define ftl_assert(expression)
 #endif
+
+
+bool check_ssd_param(struct ssd *ssd);
+void show_ssd_config(struct ssd *ssd)
+
 
 #endif
