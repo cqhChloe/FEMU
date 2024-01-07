@@ -63,6 +63,8 @@ enum {
     FEMU_RESET_ACCT = 5,
     FEMU_ENABLE_LOG = 6,
     FEMU_DISABLE_LOG = 7,
+
+    FEMU_SHOW_CONFIG = 8,
 };
 
 enum {
@@ -267,7 +269,7 @@ void ssd_init(FemuCtrl *n);
 
 
 bool check_ssd_param(struct ssd *ssd);
-void show_ssd_config(struct ssd *ssd)
+void show_ssd_config(struct ssd *ssd);
 
 
 #endif

@@ -82,7 +82,7 @@ static void bb_flip(FemuCtrl *n, NvmeCmd *cmd)
         break;
 
     case FEMU_SHOW_CONFIG:
-        show_ssd_config(n->ssd);
+        // show_ssd_config(n->ssd);
         break;
     
     default:
