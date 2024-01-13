@@ -1,8 +1,15 @@
 #include "ftl.h"
 
+#include <stdarg.h>
+#include <time.h>
+
 //#define FEMU_DEBUG_FTL
+FILE *femu_log_file = NULL;
 
 static void *ftl_thread(void *arg);
+
+static void ftl_print_time(struct ssd *ssd);
+static void ftl_print_para(struct ssd *ssd);
 
 static inline bool should_gc(struct ssd_region *region)
 {
@@ -223,15 +230,23 @@ static struct ppa get_new_page(struct ssd_region *region)
     return ppa;
 }
 
-static void check_params(struct ssdparams *spp)
+static void check_params(struct ssdparams *spp, int nand_type)
 {
     /*
      * we are using a general write pointer increment method now, no need to
      * force luns_per_ch and nchs to be power of 2
      */
 
-    //ftl_assert(is_power_of_2(spp->luns_per_ch));
-    //ftl_assert(is_power_of_2(spp->nchs));
+    ftl_assert(is_power_of_2(spp->luns_per_ch));
+    ftl_assert(is_power_of_2(spp->nchs));
+
+    ftl_assert((spp->secs_per_pg * spp->secsz) == NAND_PAGE_SIZE); // 保证page size正确
+    
+    
+    if (nand_type == QLC_NAND)
+    {
+        ftl_assert(TT_LPNS < spp->tt_pgs); // 保证有op空间
+    }
 }
 
 static void ssd_init_params(struct ssdparams *spp, int nand_type)
@@ -300,7 +315,7 @@ static void ssd_init_params(struct ssdparams *spp, int nand_type)
     spp->enable_gc_delay = true;
 
 
-    check_params(spp);
+    check_params(spp, nand_type);
 }
 
 static void ssd_init_nand_page(struct nand_page *pg, struct ssdparams *spp)
@@ -410,11 +425,21 @@ void ssd_init(FemuCtrl *n)
 
     ftl_assert(ssd);
 
+     /* Open log文件 */
+    if (femu_log_file == NULL)
+    {
+        femu_log_file = fopen("/home/chenqihui/femu.log", "w");
+    }
+    assert(femu_log_file);
+
+    /* 打印 */
+    ftl_flog("[FEMU_START] ");
 
     ssd_init_params(slc_spp, SLC_NAND);
     ssd_init_params(qlc_spp, QLC_NAND);
 
-
+    ftl_print_time(ssd);
+    ftl_print_para(ssd);
 
     /* initialize ssd internal layout architecture */
     slc->ch = g_malloc0(sizeof(struct ssd_channel) * slc_spp->nchs);
@@ -579,52 +604,52 @@ static uint64_t ssd_advance_status(struct ssd_region *region, struct ppa *ppa, s
 }
 
 /* update SSD status about one page from PG_VALID -> PG_VALID */
-// static void mark_page_invalid(struct ssd_region *region, struct ppa *ppa)
-// {
-//     struct line_mgmt *lm = &region->lm;
-//     struct ssdparams *spp = &region->sp;
-//     struct nand_block *blk = NULL;
-//     struct nand_page *pg = NULL;
-//     bool was_full_line = false;
-//     struct line *line;
+static void mark_page_invalid(struct ssd_region *region, struct ppa *ppa)
+{
+    struct line_mgmt *lm = &region->lm;
+    struct ssdparams *spp = &region->sp;
+    struct nand_block *blk = NULL;
+    struct nand_page *pg = NULL;
+    bool was_full_line = false;
+    struct line *line;
 
-//     /* update corresponding page status */
-//     pg = get_pg(region, ppa);
-//     ftl_assert(pg->status == PG_VALID);
-//     pg->status = PG_INVALID;
+    /* update corresponding page status */
+    pg = get_pg(region, ppa);
+    ftl_assert(pg->status == PG_VALID);
+    pg->status = PG_INVALID;
 
-//     /* update corresponding block status */
-//     blk = get_blk(region, ppa);
-//     ftl_assert(blk->ipc >= 0 && blk->ipc < spp->pgs_per_blk);
-//     blk->ipc++;
-//     ftl_assert(blk->vpc > 0 && blk->vpc <= spp->pgs_per_blk);
-//     blk->vpc--;
+    /* update corresponding block status */
+    blk = get_blk(region, ppa);
+    ftl_assert(blk->ipc >= 0 && blk->ipc < spp->pgs_per_blk);
+    blk->ipc++;
+    ftl_assert(blk->vpc > 0 && blk->vpc <= spp->pgs_per_blk);
+    blk->vpc--;
 
-//     /* update corresponding line status */
-//     line = get_line(region, ppa);
-//     ftl_assert(line->ipc >= 0 && line->ipc < spp->pgs_per_line);
-//     if (line->vpc == spp->pgs_per_line) {
-//         ftl_assert(line->ipc == 0);
-//         was_full_line = true;
-//     }
-//     line->ipc++;
-//     ftl_assert(line->vpc > 0 && line->vpc <= spp->pgs_per_line);
-//     /* Adjust the position of the victime line in the pq under over-writes */
-//     if (line->pos) {
-//         /* Note that line->vpc will be updated by this call */
-//         pqueue_change_priority(lm->victim_line_pq, line->vpc - 1, line);
-//     } else {
-//         line->vpc--;
-//     }
+    /* update corresponding line status */
+    line = get_line(region, ppa);
+    ftl_assert(line->ipc >= 0 && line->ipc < spp->pgs_per_line);
+    if (line->vpc == spp->pgs_per_line) {
+        ftl_assert(line->ipc == 0);
+        was_full_line = true;
+    }
+    line->ipc++;
+    ftl_assert(line->vpc > 0 && line->vpc <= spp->pgs_per_line);
+    /* Adjust the position of the victime line in the pq under over-writes */
+    if (line->pos) {
+        /* Note that line->vpc will be updated by this call */
+        pqueue_change_priority(lm->victim_line_pq, line->vpc - 1, line);
+    } else {
+        line->vpc--;
+    }
 
-//     if (was_full_line) {
-//         /* move line: "full" -> "victim" */
-//         QTAILQ_REMOVE(&lm->full_line_list, line, entry);
-//         lm->full_line_cnt--;
-//         pqueue_insert(lm->victim_line_pq, line);
-//         lm->victim_line_cnt++;
-//     }
-// }
+    if (was_full_line) {
+        /* move line: "full" -> "victim" */
+        QTAILQ_REMOVE(&lm->full_line_list, line, entry);
+        lm->full_line_cnt--;
+        pqueue_insert(lm->victim_line_pq, line);
+        lm->victim_line_cnt++;
+    }
+}
 
 static void mark_page_valid(struct ssd_region *region, struct ppa *ppa)
 {
@@ -868,9 +893,8 @@ static int do_gc(struct ssd *ssd, bool force, int gc_mode)
 
 static uint64_t ssd_read(struct ssd *ssd, NvmeRequest *req)
 {
-#if 1
     return 50;
-#else
+#if 0
     struct ssdparams *spp = &ssd->sp;
     uint64_t lba = req->slba;
     int nsecs = req->nlb;
@@ -908,9 +932,6 @@ static uint64_t ssd_read(struct ssd *ssd, NvmeRequest *req)
 
 static uint64_t ssd_write(struct ssd *ssd, NvmeRequest *req)
 {
-#if 1
-    return 50;
-#else
     uint64_t lba = req->slba;
     struct ssdparams *spp = &ssd->slc->sp;
     int len = req->nlb;
@@ -971,7 +992,6 @@ static uint64_t ssd_write(struct ssd *ssd, NvmeRequest *req)
     }
 
     return maxlat;
-#endif
 }
 
 static void *ftl_thread(void *arg)
@@ -1038,3 +1058,56 @@ static void *ftl_thread(void *arg)
     return NULL;
 }
 
+/*
+ * 在`~/femu.log`中打印日志信息
+ */
+__attribute__ ((format (printf, 1, 2)))
+void ftl_flog(const char *format, ...)
+{
+    if (femu_log_file == NULL)
+    {
+        return;
+    }
+
+    va_list args;
+    
+    va_start(args, format);
+    vfprintf(femu_log_file, format, args);
+    fflush(femu_log_file);
+    va_end(args);
+}
+
+static void ftl_print_time(struct ssd *ssd)
+{
+    // 获取当前日历时间（从1970年1月1日UTC至今的秒数）
+    time_t current_time = time(NULL);
+
+    // 将日历时间转换为本地时间结构体
+    struct tm *local_time = localtime(&current_time);
+
+    // 格式化输出日期和时间
+    char buffer[128];
+    memset(buffer, 0, sizeof(buffer));
+    strftime(buffer, sizeof(buffer), "%Y-%m-%d %H:%M:%S", local_time);
+    
+    ftl_flog("%s\n", buffer);
+
+    return;   
+}
+
+static void ftl_print_para(struct ssd *ssd)
+{
+    assert(ssd != NULL);
+    assert(ssd->slc);
+    assert(ssd->qlc);
+
+    struct ssdparams *slc_sp = &ssd->slc->sp;
+    struct ssdparams *qlc_sp = &ssd->qlc->sp;
+
+    ftl_flog("--------------param------------\n");
+    ftl_flog("[SLC] tt_pgs = %d, size = %d(MB)\n", slc_sp->tt_pgs, slc_sp->tt_pgs * (NAND_PAGE_SIZE / 1024) / 1024);
+    ftl_flog("[QLC] tt_pgs = %d\n, size = %d(MB)", qlc_sp->tt_pgs, qlc_sp->tt_pgs * (NAND_PAGE_SIZE / 1024) / 1024);
+    ftl_flog("op = %.2f%%\n", ((100.0 * (qlc_sp->tt_pgs - TT_LPNS)) / TT_LPNS));
+
+    return;
+}

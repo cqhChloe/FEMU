@@ -7,8 +7,15 @@
 #define INVALID_LPN     (~(0ULL))
 #define UNMAPPED_PPA    (~(0ULL))
 
-#define SSD_SIZE_MB (2048)  // SSD的逻辑空间大小，单位：MB（决定了映射表的大小）
-#define TT_LPNS     ((SSD_SIZE_MB) * (1024 / 4))
+/* 一些配置，可以配置做不同的实验 */
+#define SSD_SIZE_MB     (2048)  // SSD的逻辑空间大小，单位：MB（决定了映射表的大小, 需要和run-blackbox.sh保持一致）
+#define NAND_PAGE_SIZE  (4096)
+#define SLC_CHUNK_SIZE  (1)     // SLC以4KiB为粒度映射 (1个page)
+#define QLC_CHUNK_SIZE  (16)    // QLC以64KiB为粒度映射（16个page）
+
+/* 可计算的配置 */
+#define TT_LPNS ((SSD_SIZE_MB) * (1024 / (NAND_PAGE_SIZE / 1024)))  // FTL需要维护的LPN数量
+#define TT_CHUNKS ((TT_LPNS / QLC_CHUNK_SIZE) + ((TT_LPNS % QLC_CHUNK_SIZE) != 0))
 
 /* NAND cell type */
 enum NAND_CELL_TYPE{
@@ -268,8 +275,14 @@ void ssd_init(FemuCtrl *n);
 #endif
 
 
+void ftl_flog(const char *format, ...);
 bool check_ssd_param(struct ssd *ssd);
 void show_ssd_config(struct ssd *ssd);
 
+
+/*
+ * TODO:
+ * 1. 用齐夫分布模拟LPN之间压缩率的分布（在论文里解释：因为fio、filebench等测试软件没有真实数据读写）
+ */
 
 #endif
