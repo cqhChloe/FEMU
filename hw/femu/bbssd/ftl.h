@@ -8,18 +8,19 @@
 #define UNMAPPED_PPA    (~(0ULL))
 
 /* 一些配置，可以配置做不同的实验 */
-#define SSD_SIZE_MB     (2048)  // SSD的逻辑空间大小，单位：MB（决定了映射表的大小, 需要和run-blackbox.sh保持一致）
-#define NAND_PAGE_SIZE  (4096)
-#define SLC_CHUNK_SIZE  (1)     // SLC以4KiB为粒度映射 (1个page)
-#define QLC_CHUNK_SIZE  (16)    // QLC以64KiB为粒度映射（16个page）
-#define WRITE_THRESHOLD (64)    // 大小超过thr的写请求直接写入QLC
+#define SSD_SIZE_MB     (2048)                  // SSD的逻辑空间大小，单位：MB（决定了映射表的大小, 需要和run-blackbox.sh保持一致）
+#define PAGE_SIZE_SHIFT (12)
+#define NAND_PAGE_SIZE  (1 << PAGE_SIZE_SHIFT)  // 4096字节
+#define SLC_CHUNK_SIZE  (1)                     // SLC以4KiB为粒度映射 (1个page)
+#define QLC_CHUNK_SIZE  (16)                    // QLC以64KiB为粒度映射（16个page）
+#define WRITE_THRESHOLD (64)                    // 大小超过thr的写请求直接写入QLC
 
 /* 可计算的配置 */
 #define TT_LPNS ((SSD_SIZE_MB) * (1024 / (NAND_PAGE_SIZE / 1024)))  // FTL需要维护的LPN数量
 #define TT_CHUNKS ((TT_LPNS / QLC_CHUNK_SIZE) + ((TT_LPNS % QLC_CHUNK_SIZE) != 0))
 
 /* NAND cell type */
-enum NAND_CELL_TYPE{
+enum NAND_CELL_TYPE {
     SLC_NAND = 0,
     MLC_NAND = 1,
     TLC_NAND = 2,
@@ -86,6 +87,7 @@ enum {
 #define PL_BITS     (8)
 #define LUN_BITS    (8)
 #define CH_BITS     (7)
+
 
 /* describe a physical page addr */
 struct ppa {
@@ -230,12 +232,6 @@ struct nand_cmd {
     int64_t stime; /* Coperd: request arrival time */
 };
 
-struct slc_chunk_info{
-    uint32_t ppn[QLC_CHUNK_SIZE];
-    uint32_t page_length[QLC_CHUNK_SIZE];
-    bool is_clean;
-}
-
 /* different regions may consist of different NAND media */
 struct ssd_region {
     struct ssdparams sp;
@@ -246,8 +242,28 @@ struct ssd_region {
     uint64_t *rmap;     /* reverse mapptbl, assume it's stored in OOB */
 };
 
+struct ftl_mptl_slc_entry {
+    struct ppa ppa[QLC_CHUNK_SIZE];     // 每个LPN的物理位置
+    uint32_t nbytes[QLC_CHUNK_SIZE];    // 每个LPN压缩后的字节数
+    bool is_clean;
+};
+
+struct ftl_mptl_qlc_entry {
+    uint32_t sppa;                             // chunk的物理地址
+    uint32_t avg_nbyte : PAGE_SIZE_SHIFT;      // 每个page的平均长度（截取长度）。0表示1B， 2^11表示4096B
+    uint32_t max_nbyte : PAGE_SIZE_SHIFT;
+    uint32_t len : (32 - 2 * PAGE_SIZE_SHIFT); // chunk的物理页数
+    uint32_t nbytes[QLC_CHUNK_SIZE];           // 每个page的实际长度 
+};
+
+struct ftl_mapping_table {
+    struct ftl_mptl_slc_entry *slc_l2p;
+    struct ftl_mptl_qlc_entry *qlc_l2p;
+};
+
 struct ssd {
     char *ssdname;
+    struct ftl_mapping_table *maptbl;
     struct ssd_region *slc;
     struct ssd_region *qlc;
 

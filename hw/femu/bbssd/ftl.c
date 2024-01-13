@@ -3,7 +3,9 @@
 #include <stdarg.h>
 #include <time.h>
 
-//#define FEMU_DEBUG_FTL
+// #define FEMU_DEBUG_FTL
+// const char *femu_log_file_name = "/home/chenqihui/femu.log"
+const char *femu_log_file_name = "/home/wangshuai/femu.log";
 FILE *femu_log_file = NULL;
 
 static void *ftl_thread(void *arg);
@@ -23,6 +25,20 @@ static inline bool should_gc_high(struct ssd_region *region)
 
 static inline struct ppa get_maptbl_ent(struct ssd *ssd, uint64_t lpn)
 {
+    struct ftl_mptl_slc_entry *slc_l2p = ssd->maptbl->slc_l2p;
+    struct ftl_mptl_qlc_entry *qlc_l2p = ssd->maptbl->qlc_l2p;
+
+    assert(slc_l2p);
+    assert(qlc_l2p);
+
+    int chunk_id = lpn / QLC_CHUNK_SIZE;
+    int offset = lpn % QLC_CHUNK_SIZE;
+
+    if (slc_l2p->ppa[offset] != UNMAPPED_PPA)
+    {
+        return slc_l2p->ppa[offset];
+    }
+
     return ssd->maptbl[lpn];
 }
 
@@ -385,9 +401,25 @@ static void ssd_init_ch(struct ssd_channel *ch, struct ssdparams *spp)
 
 static void ssd_init_maptbl(struct ssd *ssd)
 {
-    ssd->maptbl = g_malloc0(sizeof(struct ppa) * TT_LPNS);
-    for (int i = 0; i < TT_LPNS; i++) {
-        ssd->maptbl[i].ppa = UNMAPPED_PPA;
+    /* 分配maptable结构体 */
+    ssd->maptbl = g_malloc0(sizeof(struct ftl_mapping_table));
+    
+    /* 分配slc部分的映射表并完成初始化 */
+    ssd->maptbl->slc_l2p = g_malloc0(sizeof(struct ftl_mptl_slc_entry) * TT_CHUNKS);
+    for (int i = 0; i < TT_CHUNKS; ++i)
+    {
+        for (int j = 0; j < QLC_CHUNK_SIZE; ++j)
+        {
+            ssd->maptbl->slc_l2p.ppa[j] = ppa = UNMAPPED_PPA;
+            ssd->maptbl->slc_l2p->is_clean = true;
+        }
+    }
+
+    /* 分配qlc部分的映射表并完成初始化 */
+    ssd->maptbl->qlc_l2p = g_malloc0(sizeof(struct ftl_mptl_qlc_entry)* TT_CHUNKS);
+    for (int i = 0; i < TT_CHUNKS; ++i)
+    {
+        ssd->maptbl->qlc_l2p->sppa = UNMAPPED_PPA;
     }
     
     return;
@@ -407,8 +439,10 @@ static void ssd_init_rmap(struct ssd *ssd)
         slc->rmap[i] = INVALID_LPN;
     }
 
-    qlc->rmap = g_malloc0(sizeof(uint64_t) * qlc_spp->tt_pgs);
-    for (int i = 0; i < qlc_spp->tt_pgs; i++) {
+
+    uint32_t tt_qlc_chunks = (qlc_spp->tt_pgs + QLC_CHUNK_SIZE - 1) / QLC_CHUNK_SIZE;
+    qlc->rmap = g_malloc0(sizeof(uint64_t) * tt_qlc_chunks);
+    for (int i = 0; i < tt_qlc_chunks; i++) {
         qlc->rmap[i] = INVALID_LPN;
     }
 }
@@ -440,7 +474,7 @@ void ssd_init(FemuCtrl *n)
      /* Open log文件 */
     if (femu_log_file == NULL)
     {
-        femu_log_file = fopen("/home/chenqihui/femu.log", "w");
+        femu_log_file = fopen(femu_log_file_name, "w");
     }
     assert(femu_log_file);
 
@@ -903,6 +937,11 @@ static int do_gc(struct ssd *ssd, bool force, int gc_mode)
     return 0;
 }
 
+static uint64_t ssd_write(struct ssd *ssd, NvmeRequest *req)
+{
+    return 50;
+}
+
 static uint64_t ssd_read(struct ssd *ssd, NvmeRequest *req)
 {
     return 50;
@@ -1095,11 +1134,12 @@ static void *ftl_thread(void *arg)
             ftl_assert(req);
             switch (req->cmd.opcode) {
             case NVME_CMD_WRITE:
-                if (req->nlb >= WRITE_THRESHOLD) {
-                    lat = qlc_ssd_write(ssd, req);
-                } else {
-                    lat = slc_ssd_write(ssd, req);
-                }
+                // if (req->nlb >= WRITE_THRESHOLD) {
+                //     lat = qlc_ssd_write(ssd, req);
+                // } else {
+                //     lat = slc_ssd_write(ssd, req);
+                // }
+                lat = ssd_write(ssd, req);
                 break;
             case NVME_CMD_READ:
                 lat = ssd_read(ssd, req);
