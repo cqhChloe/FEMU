@@ -12,6 +12,7 @@
 #define NAND_PAGE_SIZE  (4096)
 #define SLC_CHUNK_SIZE  (1)     // SLC以4KiB为粒度映射 (1个page)
 #define QLC_CHUNK_SIZE  (16)    // QLC以64KiB为粒度映射（16个page）
+#define WRITE_THRESHOLD (64)    // 大小超过thr的写请求直接写入QLC
 
 /* 可计算的配置 */
 #define TT_LPNS ((SSD_SIZE_MB) * (1024 / (NAND_PAGE_SIZE / 1024)))  // FTL需要维护的LPN数量
@@ -149,6 +150,7 @@ struct ssdparams {
     int pls_per_lun;  /* # of planes per LUN (Die) */
     int luns_per_ch;  /* # of LUNs per channel */
     int nchs;         /* # of channels in the SSD */
+    int ttchks;
 
     int pg_rd_lat;    /* NAND page read latency in nanoseconds */
     int pg_wr_lat;    /* NAND page program latency in nanoseconds */
@@ -228,12 +230,19 @@ struct nand_cmd {
     int64_t stime; /* Coperd: request arrival time */
 };
 
+struct slc_chunk_info{
+    uint32_t ppn[QLC_CHUNK_SIZE];
+    uint32_t page_length[QLC_CHUNK_SIZE];
+    bool is_clean;
+}
+
 /* different regions may consist of different NAND media */
 struct ssd_region {
     struct ssdparams sp;
     struct ssd_channel *ch;
     struct write_pointer wp;
     struct line_mgmt lm;
+    struct ppa *maptbl; /* page level mapping table */
     uint64_t *rmap;     /* reverse mapptbl, assume it's stored in OOB */
 };
 
@@ -241,7 +250,6 @@ struct ssd {
     char *ssdname;
     struct ssd_region *slc;
     struct ssd_region *qlc;
-    struct ppa *maptbl; /* page level mapping table */
 
     /* lockless ring for communication with NVMe IO thread */
     struct rte_ring **to_ftl;

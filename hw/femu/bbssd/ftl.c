@@ -255,10 +255,11 @@ static void ssd_init_params(struct ssdparams *spp, int nand_type)
         spp->secsz = 512;
         spp->secs_per_pg = 8;
         spp->pgs_per_blk = 256;
-        spp->blks_per_pl = 16; /* 1GB */
+        spp->blks_per_pl = 16; /* ? GB */
         spp->pls_per_lun = 1;
         spp->luns_per_ch = 8;
-        spp->nchs = 8;
+        spp->nchs = 2;
+        spp->ttchks = 100;
 
         spp->pg_rd_lat = SLC_NAND_READ_LATENCY;
         spp->pg_wr_lat = SLC_NAND_PROG_LATENCY;
@@ -372,6 +373,16 @@ static void ssd_init_ch(struct ssd_channel *ch, struct ssdparams *spp)
     ch->busy = 0;
 }
 
+// static void ssd_init_maptbl(struct ssd *ssd)
+// {
+//     ssd->maptbl = g_malloc0(sizeof(struct ppa) * TT_LPNS);
+//     for (int i = 0; i < TT_LPNS; i++) {
+//         ssd->maptbl[i].ppa = UNMAPPED_PPA;
+//     }
+    
+//     return;
+// }
+
 static void ssd_init_maptbl(struct ssd *ssd)
 {
     ssd->maptbl = g_malloc0(sizeof(struct ppa) * TT_LPNS);
@@ -381,6 +392,7 @@ static void ssd_init_maptbl(struct ssd *ssd)
     
     return;
 }
+
 
 static void ssd_init_rmap(struct ssd *ssd)
 {
@@ -787,7 +799,7 @@ static void clean_one_block(struct ssd *ssd, struct ppa *ppa, int gc_mode)
     } else if (gc_mode == GC_SLC_TO_QLC){
         region = ssd->slc;
     } else {
-        // ftl_err("Unsupported GC-mode %d when clean_one_block", gc_mode);
+        // ftl_err("Unsupported GC-mode %d when clean_one_block\n", gc_mode);
     }
     struct ssdparams *spp = &region->sp;
     struct nand_page *pg_iter = NULL;
@@ -930,11 +942,70 @@ static uint64_t ssd_read(struct ssd *ssd, NvmeRequest *req)
 #endif
 }
 
-static uint64_t ssd_write(struct ssd *ssd, NvmeRequest *req)
+static uint64_t slc_ssd_write(struct ssd *ssd, NvmeRequest *req)
 {
     uint64_t lba = req->slba;
     struct ssdparams *spp = &ssd->slc->sp;
-    int len = req->nlb;
+    uint64_t len = req->nlb;
+    uint64_t start_lpn = lba / spp->secs_per_pg;
+    uint64_t end_lpn = (lba + len - 1) / spp->secs_per_pg;
+    struct ppa ppa;
+    uint64_t lpn;
+    uint64_t curlat = 0, maxlat = 0;
+    struct ssd_region *written_region = ssd->slc;
+    int r;
+
+    if (end_lpn >= spp->tt_pgs) {
+        ftl_err("start_lpn=%"PRIu64",tt_pgs=%d\n", start_lpn, spp->tt_pgs);
+    }
+
+    while (should_gc_high(ssd->slc)) {
+        /* perform GC here until !should_gc(ssd) */
+        r = do_gc(ssd, true, GC_SLC_TO_QLC);
+        if (r == -1)
+            break;
+    }
+
+    // To do: Write requests only to the slc region
+    for (lpn = start_lpn; lpn <= end_lpn; lpn++) {
+        ppa = get_maptbl_ent(ssd, lpn);
+        if (mapped_ppa(&ppa)) {
+            /* update old page information first */
+            mark_page_invalid(written_region, &ppa);
+            set_rmap_ent(written_region, INVALID_LPN, &ppa);
+        }
+
+        /* new write */
+        ppa = get_new_page(written_region);
+        /* update maptbl */
+        set_maptbl_ent(ssd, lpn, &ppa);
+        /* update rmap */
+        set_rmap_ent(written_region, lpn, &ppa);
+
+        mark_page_valid(written_region, &ppa);
+
+        /* need to advance the write pointer here */
+        ssd_advance_write_pointer(written_region);
+
+        struct nand_cmd swr;
+        swr.type = USER_IO;
+        swr.cmd = NAND_WRITE;
+        swr.stime = req->stime;
+        /* get latency statistics */
+        curlat = ssd_advance_status(written_region, &ppa, &swr);
+        maxlat = (curlat > maxlat) ? curlat : maxlat;
+    }
+
+
+    return maxlat;
+}
+
+
+static uint64_t qlc_ssd_write(struct ssd *ssd, NvmeRequest *req)
+{
+    uint64_t lba = req->slba;
+    struct ssdparams *spp = &ssd->slc->sp;
+    uint64_t len = req->nlb;
     uint64_t start_lpn = lba / spp->secs_per_pg;
     uint64_t end_lpn = (lba + len - 1) / spp->secs_per_pg;
     struct ppa ppa;
@@ -1024,7 +1095,11 @@ static void *ftl_thread(void *arg)
             ftl_assert(req);
             switch (req->cmd.opcode) {
             case NVME_CMD_WRITE:
-                lat = ssd_write(ssd, req);
+                if (req->nlb >= WRITE_THRESHOLD) {
+                    lat = qlc_ssd_write(ssd, req);
+                } else {
+                    lat = slc_ssd_write(ssd, req);
+                }
                 break;
             case NVME_CMD_READ:
                 lat = ssd_read(ssd, req);
