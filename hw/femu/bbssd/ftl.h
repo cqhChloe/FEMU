@@ -13,11 +13,11 @@
 #define NAND_PAGE_SIZE  (1 << PAGE_SIZE_SHIFT)  // 4096字节
 #define SLC_CHUNK_SIZE  (1)                     // SLC以4KiB为粒度映射 (1个page)
 #define QLC_CHUNK_SIZE  (16)                    // QLC以64KiB为粒度映射（16个page）
-#define WRITE_THRESHOLD (64)                    // 大小超过thr的写请求直接写入QLC
+// #define WRITE_THRESHOLD (64)                    // 大小超过thr的写请求直接写入QLC
 
 /* 可计算的配置 */
 #define TT_LPNS ((SSD_SIZE_MB) * (1024 / (NAND_PAGE_SIZE / 1024)))  // FTL需要维护的LPN数量
-#define TT_CHUNKS ((TT_LPNS / QLC_CHUNK_SIZE) + ((TT_LPNS % QLC_CHUNK_SIZE) != 0))
+#define TT_CHUNKS ((TT_LPNS + QLC_CHUNK_SIZE -1 ) / QLC_CHUNK_SIZE)
 
 /* NAND cell type */
 enum NAND_CELL_TYPE {
@@ -59,7 +59,8 @@ enum {
 
     PG_FREE = 0,
     PG_INVALID = 1,
-    PG_VALID = 2
+    PG_VALID = 2,
+    PG_CLEAN = 3    // 用来标记SLC的page
 };
 
 enum {
@@ -249,11 +250,12 @@ struct ftl_mptl_slc_entry {
 };
 
 struct ftl_mptl_qlc_entry {
-    uint32_t sppa;                             // chunk的物理地址
+    struct ppa ppa[QLC_CHUNK_SIZE];             // chunk的物理地址, 可能只有部分有效的
+    uint32_t nbytes[QLC_CHUNK_SIZE];           // 每个page的实际长度 
     uint32_t avg_nbyte : PAGE_SIZE_SHIFT;      // 每个page的平均长度（截取长度）。0表示1B， 2^11表示4096B
     uint32_t max_nbyte : PAGE_SIZE_SHIFT;
     uint32_t len : (32 - 2 * PAGE_SIZE_SHIFT); // chunk的物理页数
-    uint32_t nbytes[QLC_CHUNK_SIZE];           // 每个page的实际长度 
+    bool is_valid;
 };
 
 struct ftl_mapping_table {
