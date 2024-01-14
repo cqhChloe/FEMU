@@ -13,7 +13,6 @@
 #define NAND_PAGE_SIZE  (1 << PAGE_SIZE_SHIFT)  // 4096字节
 #define SLC_CHUNK_SIZE  (1)                     // SLC以4KiB为粒度映射 (1个page)
 #define QLC_CHUNK_SIZE  (16)                    // QLC以64KiB为粒度映射（16个page）
-// #define WRITE_THRESHOLD (64)                    // 大小超过thr的写请求直接写入QLC
 
 /* 可计算的配置 */
 #define TT_LPNS ((SSD_SIZE_MB) * (1024 / (NAND_PAGE_SIZE / 1024)))  // FTL需要维护的LPN数量
@@ -250,9 +249,9 @@ struct ftl_mptl_slc_entry {
 };
 
 struct ftl_mptl_qlc_entry {
-    struct ppa ppa[QLC_CHUNK_SIZE];             // chunk的物理地址, 可能只有部分有效的
+    struct ppa ppa[QLC_CHUNK_SIZE];            // chunk的物理地址, 可能只有部分有效的
     uint32_t nbytes[QLC_CHUNK_SIZE];           // 每个page的实际长度 
-    uint32_t avg_nbyte : PAGE_SIZE_SHIFT;      // 每个page的平均长度（截取长度）。0表示1B， 2^11表示4096B
+    uint32_t avg_nbyte : PAGE_SIZE_SHIFT;      // [0-4095]每个page的平均长度（截取长度）, 长度等于【这个值+1】
     uint32_t max_nbyte : PAGE_SIZE_SHIFT;
     uint32_t len : (32 - 2 * PAGE_SIZE_SHIFT); // chunk的物理页数
     bool is_valid;
@@ -304,11 +303,5 @@ void ssd_init(FemuCtrl *n);
 void ftl_flog(const char *format, ...);
 bool check_ssd_param(struct ssd *ssd);
 void show_ssd_config(struct ssd *ssd);
-
-
-/*
- * TODO:
- * 1. 用齐夫分布模拟LPN之间压缩率的分布（在论文里解释：因为fio、filebench等测试软件没有真实数据读写）
- */
 
 #endif

@@ -16,6 +16,8 @@ static void ftl_print_para(struct ssd *ssd);
 /*
  * \brief 对于给定的LPN，随机生成其物理字节数
  * \detials TODO: 需要后续完善
+ * \detials 1. 用齐夫分布模拟LPN之间压缩率的分布
+ * （在论文里解释：因为fio、filebench等测试软件没有真实数据读写）
  */
 static inline int generate_length(uint64_t lpn)
 {
@@ -73,12 +75,13 @@ static inline uint64_t get_rmap_ent(struct ssd_region *region, struct ppa *ppa)
 
 /* 
  * \brief 设置QLC的反向映射
- * \param slpn 第一个LPN
+ * \param chunk_id QLC物理页的所有page反向映射都是这个chunk_id
+ * \param valid 如果为false，所有page的反向映射都是INVALID；true: 反向映射都是chunk_id
  */
-static inline void set_qlc_rmap(struct ssd *ssd, int chunk_id,  uint64_t slpn)
+static inline void set_qlc_rmap(struct ssd *ssd, int chunk_id,  bool valid)
 {
     struct ssd_region *region = ssd->qlc;
-    struct ftl_mptl_qlc_entry *entry = &ssd->maptbl->qlc_l2p[chunk_id];
+    struct ftl_mptl_qlc_entry *entry = get_qlc_maptbl_ent(ssd, chunk_id);
 
     struct ppa ppa;
     uint64_t pgidx = 0;
@@ -88,7 +91,7 @@ static inline void set_qlc_rmap(struct ssd *ssd, int chunk_id,  uint64_t slpn)
         ppa.ppa = entry->ppa[i].ppa;
         pgidx = ppa2pgidx(region, ppa);
         
-        region->rmap[pgidx] = (slpn == INVALID_LPN) ? slpn : chunk_id;
+        region->rmap[pgidx] = valid ? chunk_id : INVALID_LPN;
     }
 }
 
@@ -429,10 +432,10 @@ static void ssd_init_maptbl(struct ssd *ssd)
     ssd->maptbl->slc_l2p = g_malloc0(sizeof(struct ftl_mptl_slc_entry) * TT_CHUNKS);
     for (int i = 0; i < TT_CHUNKS; ++i)
     {
+        ssd->maptbl->slc_l2p[i].is_clean = true;
         for (int j = 0; j < QLC_CHUNK_SIZE; ++j)
         {
             ssd->maptbl->slc_l2p[i].ppa[j].ppa = UNMAPPED_PPA;
-            ssd->maptbl->slc_l2p[i].is_clean = true;
         }
     }
 
@@ -440,7 +443,7 @@ static void ssd_init_maptbl(struct ssd *ssd)
     ssd->maptbl->qlc_l2p = g_malloc0(sizeof(struct ftl_mptl_qlc_entry)* TT_CHUNKS);
     for (int i = 0; i < TT_CHUNKS; ++i)
     {
-        ssd->maptbl->qlc_l2p[i].sppa = UNMAPPED_PPA;
+        ssd->maptbl->qlc_l2p[i].is_valid = false;
     }
     
     return;
@@ -674,7 +677,7 @@ static void mark_qlc_chunk_invalid(struct ssd *ssd, int chunk_id)
 {
     struct ssd_region *region = ssd->qlc;
     struct ssdparams *spp = &region->sp;
-    struct ftl_mptl_qlc_entry *entry = &ssd->maptbl->qlc_l2p[chunk_id];
+    struct ftl_mptl_qlc_entry *entry = get_qlc_maptbl_ent(ssd, chunk_id);
 
     struct ppa ppa;
     struct nand_page *pg = NULL;
@@ -684,7 +687,6 @@ static void mark_qlc_chunk_invalid(struct ssd *ssd, int chunk_id)
     /* 标记chunk的每个ppa无效 */
     for (int i = 0; i < entry->len; ++i)
     {
-        
         ppa.ppa = entry->ppa[i];
 
         // 标记page无效
@@ -711,18 +713,16 @@ static void mark_qlc_chunk_invalid(struct ssd *ssd, int chunk_id)
             /* Note that line->vpc will be updated by this call */
             pqueue_change_priority(lm->victim_line_pq, line->vpc - 1, line);
         } else {
-        line->vpc--;
+            line->vpc--;
 
-        if (was_full_line) {
-            /* move line: "full" -> "victim" */
-            QTAILQ_REMOVE(&lm->full_line_list, line, entry);
-            lm->full_line_cnt--;
-            pqueue_insert(lm->victim_line_pq, line);
-            lm->victim_line_cnt++;
+            if (was_full_line) {
+                /* move line: "full" -> "victim" */
+                QTAILQ_REMOVE(&lm->full_line_list, line, entry);
+                lm->full_line_cnt--;
+                pqueue_insert(lm->victim_line_pq, line);
+                lm->victim_line_cnt++;
+            }
         }
-    }
-
-
     }
 
 
@@ -1062,7 +1062,7 @@ static uint64_t ssd_write(struct ssd *ssd, NvmeRequest *req)
     /* 处理GC */
     while (should_gc_high(ssd->slc))
     {
-        r = do_slc_gc(ssd, trueC);
+        r = do_gc_slc(ssd, true);
     }
 
     /* 处理写请求 */
@@ -1077,7 +1077,7 @@ static uint64_t ssd_write(struct ssd *ssd, NvmeRequest *req)
             if (mapped_ppa(&qlc_l2p_entry->sppa))
             {
                 mark_qlc_chunk_invalid(ssd, chunk_id);
-                set_qlc_rmap(ssd, chunk_id, INVALID_LPN);
+                set_qlc_rmap(ssd, chunk_id, false);
             }
 
             
