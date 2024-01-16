@@ -19,9 +19,13 @@ static void ftl_print_para(struct ssd *ssd);
  * \detials 1. 用齐夫分布模拟LPN之间压缩率的分布
  * （在论文里解释：因为fio、filebench等测试软件没有真实数据读写）
  */
-static inline int generate_length(uint64_t lpn)
+static inline int* generate_length(void)
 {
-    return NAND_PAGE_SIZE / 2;
+    int* len = (int*)malloc(QLC_CHUNK_SIZE * sizeof(int));
+    for (int i = 0; i < QLC_CHUNK_SIZE; i++) {
+        len[i] = NAND_PAGE_SIZE / 2;
+    }
+    return len;
 }
 
 static inline bool should_gc(struct ssd_region *region)
@@ -44,11 +48,25 @@ static inline struct ftl_mptl_qlc_entry *get_qlc_maptbl_ent(struct ssd *ssd, uin
     return &ssd->maptbl->qlc_l2p[lcn];
 }
 
-static inline void set_maptbl_ent(struct ssd *ssd, uint64_t lpn, struct ppa *ppa)
+// unfinished
+static inline void set_qlc_maptbl_ent(struct ssd *ssd, uint64_t lpn, struct ppa *ppa, int len, int avg_nbyte, int max_nbyte)
 {
     ftl_assert(lpn < ssd->qlc->sp.tt_pgs);
-    ssd->maptbl[lpn] = *ppa;
+
+    if(lpn % QLC_CHUNK_SIZE == 0) {
+        ssd->maptbl->qlc_l2p->avg_nbyte = avg_nbyte;
+        ssd->maptbl->qlc_l2p->max_nbyte = max_nbyte;
+    }
+    ssd->maptbl->qlc_l2p->ppa[lpn % QLC_CHUNK_SIZE] = *ppa;
+    ssd->maptbl->qlc_l2p->nbytes[lpn % QLC_CHUNK_SIZE] = len;
 }
+
+// unfinished
+// static inline void set_slc_maptbl_ent(struct ssd *ssd, uint64_t lpn, struct ppa *ppa)
+// {
+//     ftl_assert(lpn < ssd->qlc->sp.tt_pgs);
+//     ssd->maptbl[lpn] = *ppa;
+// }
 
 static uint64_t ppa2pgidx(struct ssd_region *region, struct ppa *ppa)
 {
@@ -98,7 +116,7 @@ static inline void set_qlc_rmap(struct ssd *ssd, int chunk_id,  bool valid)
 /* set rmap[page_no(ppa)] -> lpn */
 static inline void set_rmap_ent(struct ssd_region *region, uint64_t lpn, struct ppa *ppa)
 {
-    uint64_t pgidx = ppa2pgidx(region, ppa);
+    uint64_t pgidx = ppa2pgidx(region, &ppa);
 
     region->rmap[pgidx] = lpn;
 }
@@ -683,11 +701,13 @@ static void mark_qlc_chunk_invalid(struct ssd *ssd, int chunk_id)
     struct nand_page *pg = NULL;
     struct nand_block *blk = NULL;
     struct line *line = NULL;
+    bool was_full_line = false;
 
     /* 标记chunk的每个ppa无效 */
     for (int i = 0; i < entry->len; ++i)
     {
-        ppa.ppa = entry->ppa[i];
+        struct line_mgmt* lm = &ssd->qlc->lm;
+        ppa.ppa = entry->ppa[i].ppa;
 
         // 标记page无效
         pg = get_pg(region, &ppa);
@@ -854,9 +874,9 @@ static uint64_t gc_write_page(struct ssd *ssd, struct ppa *old_ppa, int gc_mode)
     ftl_assert(valid_lpn(cleared_region, lpn));
     new_ppa = get_new_page(written_region);
     /* update maptbl */
-    set_maptbl_ent(ssd, lpn, &new_ppa);
+    // set_maptbl_ent(ssd, lpn, &new_ppa);
     /* update rmap */
-    set_rmap_ent(written_region, lpn, &new_ppa);
+    // set_rmap_ent(written_region, lpn, &new_ppa);
 
     mark_page_valid(written_region, &new_ppa);
 
@@ -1019,7 +1039,7 @@ static int do_gc_slc(struct ssd *ssd, bool force)
     while (should_gc_high(ssd->qlc))
     {
         r = do_gc_qlc(ssd, true);
-        ir (r == -1)
+        if (r == -1)
             break;
     }
 
@@ -1034,16 +1054,73 @@ static int do_gc_slc(struct ssd *ssd, bool force)
     return 0;
 }
 
+static uint32_t max_aligned_size() {
+    return NAND_PAGE_SIZE;
+}
+
+static uint32_t calculate_aligned_size(int* gen_len) {
+    int cnt = 0;
+    for(int i = 0; i < QLC_CHUNK_SIZE; i ++) {
+        cnt += gen_len[i];
+    }
+    return cnt / QLC_CHUNK_SIZE;
+}
+
+static uint64_t qlc_write(struct ssd *ssd, int chunk_id, uint64_t lpn, NvmeRequest *req)
+{
+    uint64_t curlat = 0, maxlat = 0;
+    struct ssd_region* qlc = ssd->qlc;
+    int residual_check = 0;
+    int cnt_chunk_len = 0;
+    struct ppa ppa;
+    uint32_t aligned_size, max_size;
+    // 计算对齐单元的大小
+    int* gen_len = generate_length(QLC_CHUNK_SIZE);
+    max_size = max_aligned_size(gen_len);// 待实现
+    aligned_size = calculate_aligned_size(gen_len);// 待实现
+    
+    for(int i = 0; i < QLC_CHUNK_SIZE; i++) {
+        ppa = get_new_page(ssd->qlc);
+        // 记录maptbl[lcn] = sppn，nbyetes[i] = gen_len[i],avg_nbyte,max_nbyte,chunk的物理页数len
+        set_qlc_maptbl_ent(ssd, chunk_id, &ppa, gen_len[i], aligned_size, max_size);
+        set_rmap_ent(qlc, lpn, &ppa);
+        mark_page_valid(qlc, &ppa);
+
+        residual_check += gen_len[i];
+        if(residual_check >= NAND_PAGE_SIZE) {
+            cnt_chunk_len ++;
+            ssd_advance_write_pointer(ssd->qlc);
+            residual_check %= NAND_PAGE_SIZE;
+
+            // 计算latency
+            struct nand_cmd swr;
+            swr.type = USER_IO;
+            swr.cmd = NAND_WRITE;
+            swr.stime = req->stime;
+            /* get latency statistics */
+            curlat = ssd_advance_status(qlc, &ppa, &swr);
+            maxlat = (curlat > maxlat) ? curlat : maxlat;
+        }
+       
+    }
+    if(residual_check) {
+        cnt_chunk_len ++;
+    }
+    ssd->maptbl->qlc_l2p->len = cnt_chunk_len;
+    return maxlat;    
+}
+
 static uint64_t ssd_write(struct ssd *ssd, NvmeRequest *req)
 {
     uint64_t lpn = 0;
-    struct ppa slc_ppa, qlc_ppa;
+    // struct ppa slc_ppa, qlc_ppa;
     struct ssdparams *qlc_spp = &ssd->qlc->sp;
     struct ftl_mptl_slc_entry *slc_l2p_entry = NULL;
     struct ftl_mptl_qlc_entry *qlc_l2p_entry = NULL;
     int chunk_id = 0;
     int offset_int_chunk = 0;
     uint64_t max_lat = 0;
+    int r;
 
     /* 将请求的长度转化为4KB LPN */
     uint64_t lba = req->slba;
@@ -1054,7 +1131,7 @@ static uint64_t ssd_write(struct ssd *ssd, NvmeRequest *req)
     /* 判断地址范围的合法性 */
     if (end_lpn >= qlc_spp->tt_pgs)
     {
-        ftl_flog("[Error] %s: start_lpn=%lu, end_lpn=%lu, tt_qlc_pages=%d\n", __FUNCTION_, start_lpn, end_lpn, qlc_spp->tt_pgs);
+        ftl_flog("[Error] %s: start_lpn=%lu, end_lpn=%lu, tt_qlc_pages=%d\n", __FUNCTION__, start_lpn, end_lpn, qlc_spp->tt_pgs);
 
         return 50;
     }
@@ -1063,6 +1140,9 @@ static uint64_t ssd_write(struct ssd *ssd, NvmeRequest *req)
     while (should_gc_high(ssd->slc))
     {
         r = do_gc_slc(ssd, true);
+        if(r == -1) {
+            // ftl_err("GC failure");
+        }
     }
 
     /* 处理写请求 */
@@ -1074,13 +1154,13 @@ static uint64_t ssd_write(struct ssd *ssd, NvmeRequest *req)
         if ((lpn % QLC_CHUNK_SIZE == 0) && ((lpn + QLC_CHUNK_SIZE - 1) <= end_lpn))
         {
             qlc_l2p_entry = get_qlc_maptbl_ent(ssd, chunk_id);
-            if (mapped_ppa(&qlc_l2p_entry->sppa))
+            if (mapped_ppa(&qlc_l2p_entry->ppa))
             {
                 mark_qlc_chunk_invalid(ssd, chunk_id);
                 set_qlc_rmap(ssd, chunk_id, false);
             }
 
-            
+            max_lat += qlc_write(ssd, chunk_id, lpn, &req);
 
             lpn += QLC_CHUNK_SIZE; // 处理下一个chunk
         }
@@ -1313,12 +1393,12 @@ static void *ftl_thread(void *arg)
             }
 
             /* clean one line if needed (in the background) */
-            if (should_gc(ssd->slc)) {
-                do_gc(ssd, false, GC_SLC_TO_QLC);
-            }
-            if (should_gc(ssd->qlc)) {
-                do_gc(ssd, false, GC_QLC);
-            }
+            // if (should_gc(ssd->slc)) {
+            //     do_gc(ssd, false, GC_SLC_TO_QLC);
+            // }
+            // if (should_gc(ssd->qlc)) {
+            //     do_gc(ssd, false, GC_QLC);
+            // }
         }
     }
 
