@@ -11,6 +11,7 @@ bool check_ssd_param(struct ssd *ssd) {
     assert(ssd->qlc);
     assert(ssd->slc->sp);
     assert(ssd->qlc->sp)
+    assert(QLC_CHUNK_SIZE <= 64);
 
     /* 检查逻辑空间是否小于QLC物理空间 */
     if (ssd->qlc->sp.tt_pgs <= TT_LPNS)

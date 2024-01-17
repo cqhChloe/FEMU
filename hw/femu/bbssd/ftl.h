@@ -12,7 +12,7 @@
 #define PAGE_SIZE_SHIFT (12)
 #define NAND_PAGE_SIZE  (1 << PAGE_SIZE_SHIFT)  // 4096字节
 #define SLC_CHUNK_SIZE  (1)                     // SLC以4KiB为粒度映射 (1个page)
-#define QLC_CHUNK_SIZE  (16)                    // QLC以64KiB为粒度映射（16个page）
+#define QLC_CHUNK_SIZE  (16)                    // QLC以64KiB为粒度映射（16个page），最大支持64
 
 /* 可计算的配置 */
 #define TT_LPNS ((SSD_SIZE_MB) * (1024 / (NAND_PAGE_SIZE / 1024)))  // FTL需要维护的LPN数量
@@ -255,7 +255,7 @@ struct ftl_mptl_qlc_entry {
     uint32_t avg_nbyte : PAGE_SIZE_SHIFT;      // [0-4095]每个page的平均长度（截取长度）, 长度等于【这个值+1】
     uint32_t max_nbyte : PAGE_SIZE_SHIFT;
     uint32_t len : (32 - 2 * PAGE_SIZE_SHIFT); // chunk的物理页数
-    bool is_valid;
+    uint64_t valid_bitmap;                     // 标记每个LPN是否有效。比如中间的一些LPN用户可能没有写过      
 };
 
 struct ftl_mapping_table {

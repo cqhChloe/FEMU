@@ -49,6 +49,7 @@ static inline struct ftl_mptl_qlc_entry *get_qlc_maptbl_ent(struct ssd *ssd, uin
 }
 
 // unfinished
+// TODO: 参数加一个bitmap，标记每个LPN是否有效
 static inline void set_qlc_maptbl_ent(struct ssd *ssd, uint64_t lpn, struct ppa *ppa, int len, int avg_nbyte, int max_nbyte)
 {
     ftl_assert(lpn < ssd->qlc->sp.tt_pgs);
@@ -1094,8 +1095,96 @@ static uint32_t calculate_aligned_size(int* gen_len) {
     return cnt / QLC_CHUNK_SIZE;
 }
 
-static uint64_t qlc_write(struct ssd *ssd, int chunk_id, uint64_t lpn, NvmeRequest *req)
+
+static uint64_t qlc_read(struct ssd *ssd, uint64_t chunk_id, uint64_t bitmap, uint64_t stime)
 {
+
+}
+
+/*
+ * \brief qlc写函数
+ * \param chunk_id 写入chunk id
+ * \param bitmap 实际写入的LPN位图
+ * \param 请求的起始时间
+ */
+static uint64_t qlc_write(struct ssd *ssd, uint64_t chunk_id, uint64_t bitmap, uint64_t stime)
+{
+    int offset_in_chunk = 0;
+    uint64_t curlat = 0;
+    uint64_t maxlat = 0;
+    int r = 0;
+    struct ftl_mptl_qlc_entry *entry = NULL;
+    struct ppa ppa;
+    bool need_read = false;
+
+    /* 判断地址合法性 */
+    if (lpn + lens - 1 >= TT_LPNS) // 超出地址范围
+    {
+        ftl_flog("[Error] %s: lpn=%lu, lens=%u, TT_LPNS=%d\n", __FUNCTION__, lpn, lens, TT_LPNS);
+
+        return 50;
+    }
+    if ((lpn / QLC_CHUNK_SIZE) != ((lpn + lens - 1) / QLC_CHUNK_SIZE)) // 跨越了chunk
+    {
+        ftl_flog("[Error] %s: lpn=%lu, lens=%u, QLC_CHUNK_SIZE=%d\n", __FUNCTION__, lpn, lens, QLC_CHUNK_SIZE);
+
+        return 50;
+    }
+
+    /* 处理gc */
+    while (should_gc_high(ssd->qlc))
+    {
+        r = do_gc_qlc(ssd, true);
+        if(r == -1) {
+            ftl_flog("GC failure");
+        }
+    }
+
+    /* 计算chunk id，得到chunk */
+    entry = get_qlc_maptbl_ent(ssd, chunk_id);
+
+    /*
+     * 新写入： 101011  ->  010100
+     * 原本：   110000      010000
+     */
+    /* 判断是否需要读取（新写入的 和 旧的 部分重叠），获取需要读取的长度 */
+    // 需要读取的：old_bitmap & ~(new_map) == 0 不需要读， 否则需要读
+
+
+
+    /* 如果需要读，处理读 (更新硬件延迟) */
+    if (old_bitmap & ~(new_map) != 0)
+    {
+        qlc_read()
+
+    if (entry->valid_bitmap != 0)
+    {
+        旧page无效
+
+        反向映射更新，全部都是chunkid
+    }
+
+    /* 写新的数据 old_bitmap | new_bitmap LPN数量 */
+    for (int i = 0; i < lens; ++i)
+    {
+        /* FIXME:加入压缩拼接的逻辑 */
+        
+
+    } => 多少个PPA
+
+    offset_in_chunk = (lpn + i) % QLC_CHUNK_SIZE;
+
+        /* 获取新的page */
+        ppa = get_new_page(ssd->qlc);
+
+        /* 设置页面为有效的 */
+        curlat = 
+
+        maxlat = 
+
+    
+
+    /* 更新映射表 */
 
 #if 0
     qlc_l2p_entry = get_qlc_maptbl_ent(ssd, chunk_id);
@@ -1104,7 +1193,7 @@ static uint64_t qlc_write(struct ssd *ssd, int chunk_id, uint64_t lpn, NvmeReque
         mark_qlc_chunk_invalid(ssd, chunk_id);
         set_qlc_rmap(ssd, chunk_id, false);
     }
-#endif
+
     uint64_t curlat = 0, maxlat = 0;
     struct ssd_region* qlc = ssd->qlc;
     int residual_check = 0;// 检查一个页是否写满了,页写满了就推ssd写指针
@@ -1149,25 +1238,26 @@ static uint64_t qlc_write(struct ssd *ssd, int chunk_id, uint64_t lpn, NvmeReque
         cnt_chunk_len ++;
     }
     ssd->maptbl->qlc_l2p->len = cnt_chunk_len;
+#endif 
+
     return maxlat;    
 }
 
 /*
  * \brief slc写函数
  * \param lpn待写入的LPN
- * \param lpn的字节数（体现压缩率）
  * \param stime 请求的开始时间
  * \return 写请求的延迟
  */
-static uint64_t slc_write(struct ssd *ssd, uint64_t lpn, uint32_t nbytes, uint64_t stime)
+static uint64_t slc_write(struct ssd *ssd, uint64_t lpn, uint64_t stime)
 {
     struct ftl_mptl_slc_entry *entry = NULL;
     uint64_t lcn = lpn / QLC_CHUNK_SIZE;
     int offset_in_chunk = lpn % QLC_CHUNK_SIZE;
-    struct ppa ppa; // 存放物理地址
-    int r = 0;      // 调用其他函数的返回值
-    int lat;        // 延迟，本函数的返回值
-
+    uint32_t nbytes = 0; // LPN压缩后的字节数（体现压缩率）
+    struct ppa ppa;      // 存放物理地址
+    int r = 0;           // 调用其他函数的返回值
+    int lat;             // 延迟，本函数的返回值
 
     /* 处理GC */
     while (should_gc_high(ssd->slc))
@@ -1190,9 +1280,9 @@ static uint64_t slc_write(struct ssd *ssd, uint64_t lpn, uint32_t nbytes, uint64
 
     /* 从slc获取新的ppa */
     ppa = get_new_page(ssd->slc);
-    
+
     /* 更新slc映射表 */
-    set_slc_maptbl_ent(ssd, lpn, &ppa, nbytes);
+    set_slc_maptbl_ent(ssd, lpn, &ppa, nbytes); // FIXME: 压缩率需要计算
 
     /* 标记chunk dirty */
     set_slc_maptbl_ent_state(ssd, lpn, false);
@@ -1220,7 +1310,6 @@ static uint64_t ssd_write(struct ssd *ssd, NvmeRequest *req)
 {
     struct ssdparams *qlc_spp = &ssd->qlc->sp;
     uint64_t lpn = 0;
-    int chunk_id = 0;
     uint64_t curlat = 0;
     uint64_t maxlat = 0;
 
@@ -1231,9 +1320,9 @@ static uint64_t ssd_write(struct ssd *ssd, NvmeRequest *req)
     uint64_t end_lpn = (lba + nsecs - 1) / qlc_spp->secs_per_pg;
 
     /* 判断地址范围的合法性 */
-    if (end_lpn >= qlc_spp->tt_pgs)
+    if (end_lpn >= TT_LPNS)
     {
-        ftl_flog("[Error] %s: start_lpn=%lu, end_lpn=%lu, tt_qlc_pages=%d\n", __FUNCTION__, start_lpn, end_lpn, qlc_spp->tt_pgs);
+        ftl_flog("[Error] %s: start_lpn=%lu, end_lpn=%lu, TT_LPNS=%d\n", __FUNCTION__, start_lpn, end_lpn, TT_LPNS);
 
         return 50;
     }
@@ -1241,12 +1330,10 @@ static uint64_t ssd_write(struct ssd *ssd, NvmeRequest *req)
     /* 处理写请求 */
     for (lpn = start_lpn; lpn <= end_lpn; ) 
     {
-        chunk_id = lpn / QLC_CHUNK_SIZE;
-
         /* 如果lpn足够一个chunk，直接写QLC */
         if ((lpn % QLC_CHUNK_SIZE == 0) && ((lpn + QLC_CHUNK_SIZE - 1) <= end_lpn))
         {
-            curlat = qlc_write(ssd, chunk_id, lpn, req);   // FIXME:这个函数的参数还需要再考虑
+            curlat = qlc_write(ssd, chunk_id, valid_map, req->stime); /* 10001 */
 
             maxlat = (curlat > maxlat) ? curlat : maxlat;
 
@@ -1255,7 +1342,7 @@ static uint64_t ssd_write(struct ssd *ssd, NvmeRequest *req)
         /* 不足一个chunk的LPN写入SLC */
         else
         {
-            curlat = slc_write(ssd, lpn, 0, req->stime); // FIXME:第三个参数以后要传入压缩后的长度
+            curlat = slc_write(ssd, lpn, req->stime);
 
             maxlat = (curlat > maxlat) ? curlat : maxlat;
 
