@@ -234,6 +234,7 @@ struct nand_cmd {
 
 /* different regions may consist of different NAND media */
 struct ssd_region {
+    int nand_type;
     struct ssdparams sp;
     struct ssd_channel *ch;
     struct write_pointer wp;
