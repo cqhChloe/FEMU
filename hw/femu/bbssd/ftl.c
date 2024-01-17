@@ -856,15 +856,15 @@ static void gc_read_page(struct ssd_region *region, struct ppa *ppa)
 /* move valid page data (already in DRAM) from victim line to a new page */
 static uint64_t gc_write_page(struct ssd *ssd, struct ppa *old_ppa, int gc_mode)
 {
-    struct ssd_region *cleared_region = NULL;    
+    // struct ssd_region *cleared_region = NULL;    
     // gc mode == slc->qlc, old_ppa in slc, new ppa in qlc
-    if (gc_mode == GC_SLC_TO_QLC) {
-        cleared_region = ssd->slc;
-    } else if (gc_mode == GC_QLC) {
-        cleared_region = ssd->qlc;
-    } else {
-        // 报错
-    }
+    // if (gc_mode == GC_SLC_TO_QLC) {
+    //     cleared_region = ssd->slc;
+    // } else if (gc_mode == GC_QLC) {
+    //     cleared_region = ssd->qlc;
+    // } else {
+    //     // 报错
+    // }
     struct ssd_region *written_region = ssd->qlc;
 
     // uint64_t lpn = get_rmap_ent(cleared_region, old_ppa); 
@@ -1127,7 +1127,7 @@ static uint64_t ssd_write(struct ssd *ssd, NvmeRequest *req)
     struct ftl_mptl_slc_entry *slc_l2p_entry = NULL;
     struct ftl_mptl_qlc_entry *qlc_l2p_entry = NULL;
     int chunk_id = 0;
-    int offset_int_chunk = 0;
+    int offset_in_chunk = 0;
     uint64_t max_lat = 0;
     int r;
 
@@ -1158,30 +1158,33 @@ static uint64_t ssd_write(struct ssd *ssd, NvmeRequest *req)
     for (lpn = start_lpn; lpn <= end_lpn; ) 
     {
         chunk_id = lpn / QLC_CHUNK_SIZE;
+        offset_in_chunk = lpn % QLC_CHUNK_SIZE;
 
         /* 如果lpn足够一个chunk，直接写QLC */
         if ((lpn % QLC_CHUNK_SIZE == 0) && ((lpn + QLC_CHUNK_SIZE - 1) <= end_lpn))
         {
             qlc_l2p_entry = get_qlc_maptbl_ent(ssd, chunk_id);
-            if (mapped_ppa(&qlc_l2p_entry->ppa))
+            if (mapped_ppa(&qlc_l2p_entry->ppa[offset_in_chunk]))
             {
                 mark_qlc_chunk_invalid(ssd, chunk_id);
                 set_qlc_rmap(ssd, chunk_id, false);
             }
 
-            max_lat += qlc_write(ssd, chunk_id, lpn, &req);
+            max_lat += qlc_write(ssd, chunk_id, lpn, req);
 
             lpn += QLC_CHUNK_SIZE; // 处理下一个chunk
         }
         /* 不足一个chunk的LPN写入SLC */
         else
         {
-            offset_int_chunk = lpn % QLC_CHUNK_SIZE;
+            offset_in_chunk = lpn % QLC_CHUNK_SIZE;
             slc_l2p_entry = get_slc_maptbl_ent(ssd, chunk_id);
-            max += slc_write(); //待完成
+            max_lat += slc_write(ssd, chunk_id, lpn, req); //待完成
             lpn += 1; // 处理下一个lpn
         }
     }
+
+    printf("slc_l2p_entry = %p\n", slc_l2p_entry);
 
     return max_lat;
 }
