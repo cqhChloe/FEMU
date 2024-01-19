@@ -255,7 +255,8 @@ struct ftl_mptl_qlc_entry {
     uint32_t avg_nbyte : PAGE_SIZE_SHIFT;      // [0-4095]每个page的平均长度（截取长度）, 长度等于【这个值+1】
     uint32_t max_nbyte : PAGE_SIZE_SHIFT;
     uint32_t len : (32 - 2 * PAGE_SIZE_SHIFT); // chunk的物理页数
-    uint64_t valid_bitmap;                     // 标记每个LPN是否有效。比如中间的一些LPN用户可能没有写过      
+    uint64_t valid_bitmap;                     // 标记每个LPN是否有效。比如中间的一些LPN用户可能没有写过 
+    uint64_t alignment_bitmap;
 };
 
 struct ftl_mapping_table {
