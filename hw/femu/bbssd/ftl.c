@@ -1,7 +1,7 @@
 #include "ftl.h"
 
 #include <stdarg.h>
-#include <time.h>
+#include <time.h> // for generate_length
 
 // #define FEMU_DEBUG_FTL
 const char *femu_log_file_name = "/home/chenqihui/femu.log";
@@ -15,8 +15,8 @@ static void ftl_print_para(struct ssd *ssd);
 
 /*
  * \brief 对于给定的LPN，随机生成其物理字节数
- * \detials TODO: 需要后续完善
- * \detials 1. 用齐夫分布模拟LPN之间压缩率的分布
+ * \details TODO: 需要后续完善
+ * \details 1. 用齐夫分布模拟LPN之间压缩率的分布
  * （在论文里解释：因为fio、filebench等测试软件没有真实数据读写）
  */
 static inline uint32_t generate_length(void)
@@ -1317,7 +1317,7 @@ static uint64_t slc_write(struct ssd *ssd, uint64_t lpn, uint64_t stime)
     {
         r = do_gc_slc(ssd, true);
         if(r == -1) {
-            ftl_flog("GC failure");
+            ftl_flog("GC fail when slc write");
         }
     }
 
@@ -1388,7 +1388,7 @@ static uint64_t ssd_write(struct ssd *ssd, NvmeRequest *req)
         /* 如果lpn足够一个chunk，直接写QLC */
         if ((lpn % QLC_CHUNK_SIZE == 0) && ((lpn + QLC_CHUNK_SIZE - 1) <= end_lpn))
         {
-            valid_map = 1;
+            valid_map = 1; // 设定valid map为1
             curlat = qlc_write(ssd, chunk_id, valid_map, req->stime); /* 10001 */
             maxlat = (curlat > maxlat) ? curlat : maxlat;
             lpn += QLC_CHUNK_SIZE; // 处理下一个chunk
@@ -1409,8 +1409,61 @@ static uint64_t ssd_write(struct ssd *ssd, NvmeRequest *req)
 
 static uint64_t ssd_read(struct ssd *ssd, NvmeRequest *req)
 {
-    return 50;
+    struct ssdparams *spp = &ssd->sp;
+    uint64_t lba = req->slba;
+    int nsecs = req->nlb;
+    struct ppa slc_ppa;
+    struct ppa qlc_ppa;
+    uint64_t start_lpn = lba / spp->secs_per_pg;
+    uint64_t end_lpn = (lba + nsecs - 1) / spp->secs_per_pg;
+    uint64_t lpn;
+    uint64_t sublat, maxlat = 0;
+    uint64_t chunk_id;
+    uint64_t offset_within_chunk;
+
+    if (end_lpn >= spp->tt_pgs) {
+        ftl_err("start_lpn=%"PRIu64",tt_pgs=%d\n", start_lpn, ssd->sp.tt_pgs);
+    }
+
+    /* normal IO read path */
+    for (lpn = start_lpn; lpn <= end_lpn; lpn++) {
+        // 去slc maptbl中找lpn,找到了去slc_read
+        chunk_id = lpn / QLC_CHUNK_SIZE;
+        offset_within_chunk = lpn % QLC_CHUNK_SIZE;
+        slc_ppa = get_slc_maptbl_ent(ssd, chunk_id);
+        
+        if (mapped_ppa(&slc_ppa) && valid_ppa(ssd->slc, &slc_ppa)) {
+            struct nand_cmd srd;
+            srd.type = USER_IO;
+            srd.cmd = NAND_READ;
+            srd.stime = req->stime;
+            sublat = ssd_advance_status(ssd, &slc_ppa, &srd);
+            maxlat = (sublat > maxlat) ? sublat : maxlat;
+            continue;
+        }
+
+        qlc_ppa = get_qlc_maptbl_ent(ssd, chunk_id);
+                // offset计算物理位置
+        if (!mapped_ppa(&qlc_ppa) || !valid_ppa(ssd, &qlc_ppa)) {
+            //printf("%s,lpn(%" PRId64 ") not mapped to valid ppa\n", ssd->ssdname, lpn);
+            //printf("Invalid ppa,ch:%d,lun:%d,blk:%d,pl:%d,pg:%d,sec:%d\n",
+            //ppa.g.ch, ppa.g.lun, ppa.g.blk, ppa.g.pl, ppa.g.pg, ppa.g.sec);
+        }
+
+        struct nand_cmd srd;
+        srd.type = USER_IO;
+        srd.cmd = NAND_READ;
+        srd.stime = req->stime;
+        sublat = ssd_advance_status(ssd, &qlc_ppa, &srd);
+        maxlat = (sublat > maxlat) ? sublat : maxlat;
+    }
+
+    return maxlat;
+}
 #if 0
+static uint64_t ssd_read(struct ssd *ssd, NvmeRequest *req)
+{
+    return 50;
     struct ssdparams *spp = &ssd->sp;
     uint64_t lba = req->slba;
     int nsecs = req->nlb;
@@ -1443,8 +1496,9 @@ static uint64_t ssd_read(struct ssd *ssd, NvmeRequest *req)
     }
 
     return maxlat;
-#endif
 }
+#endif
+
 
 #if 0
 static uint64_t slc_ssd_write(struct ssd *ssd, NvmeRequest *req)
