@@ -51,7 +51,9 @@ static inline struct ftl_mptl_qlc_entry *get_qlc_maptbl_ent(struct ssd *ssd, uin
 static inline void set_qlc_maptbl_ent(struct ssd *ssd, uint64_t lpn, struct ppa *ppa)
 {
     ftl_assert(lpn < ssd->qlc->sp.tt_pgs);
-    ssd->maptbl->qlc_l2p->ppa[lpn % QLC_CHUNK_SIZE] = *ppa;
+
+    struct ftl_mptl_qlc_entry *entry = &ssd->maptbl->qlc_l2p[lpn / QLC_CHUNK_SIZE];
+    entry->ppa[lpn % QLC_CHUNK_SIZE] = *ppa;
 }
 
 /*
@@ -1088,6 +1090,33 @@ static uint32_t calculate_aligned_size(uint32_t gen_len[]) {
     return cnt / QLC_CHUNK_SIZE;
 }
 
+static uint64_t slc_read(struct ssd *ssd, uint64_t chunk_id, uint64_t bitmap, uint64_t stime)
+{
+    struct ssdparams *spp = &ssd->slc->sp;
+    struct ppa ppa;
+    int lens = QLC_CHUNK_SIZE;
+    struct ftl_mptl_slc_entry *entry = NULL;
+    uint64_t start_lpn = chunk_id * QLC_CHUNK_SIZE;
+    uint64_t sublat, maxlat = 0;
+
+    if (start_lpn + lens - 1 >= spp->tt_pgs) {
+        ftl_err("start_lpn=%"PRIu64",tt_pgs=%d\n", start_lpn, ssd->qlc->sp.tt_pgs);
+    }
+    entry = get_slc_maptbl_ent(ssd, chunk_id);
+    for (int i = 0; i < lens; i++) {
+        ppa = entry->ppa[i];
+        if (mapped_ppa(&ppa) && valid_ppa(ssd->slc, &ppa)) {
+            struct nand_cmd srd;
+            srd.type = USER_IO;
+            srd.cmd = NAND_READ;
+            srd.stime = stime;
+            sublat = ssd_advance_status(ssd->slc, &ppa, &srd);
+            maxlat = (sublat > maxlat) ? sublat : maxlat;
+        }
+    }
+    return maxlat;
+}
+
 
 static uint64_t qlc_read(struct ssd *ssd, uint64_t chunk_id, uint64_t bitmap, uint64_t stime)
 {
@@ -1215,6 +1244,7 @@ static uint64_t qlc_write(struct ssd *ssd, uint64_t chunk_id, uint64_t bitmap, u
         set_qlc_maptbl_ent(ssd, chunk_id, &ppa);
         set_rmap_ent(ssd->qlc, lpn, &ppa);
         mark_page_valid(ssd->qlc, &ppa);
+        // valid_bitmap更新
 
         if(residual_check >= NAND_PAGE_SIZE) {
             cnt_chunk_len ++;
@@ -1359,6 +1389,7 @@ static uint64_t slc_write(struct ssd *ssd, uint64_t lpn, uint64_t stime)
 
     return lat;
 }
+
 static uint64_t ssd_write(struct ssd *ssd, NvmeRequest *req)
 {
     struct ssdparams *qlc_spp = &ssd->qlc->sp;
@@ -1381,6 +1412,13 @@ static uint64_t ssd_write(struct ssd *ssd, NvmeRequest *req)
         return 50;
     }
 
+    // while (should_gc_high(ssd->slc)) { 
+    //     /* perform GC here until !should_gc(ssd) */
+    //     int r = do_gc_slc(ssd, true, GC_SLC_TO_QLC);
+    //     if (r == -1)
+    //         break;
+    // }
+
     /* 处理写请求 */
     for (lpn = start_lpn; lpn <= end_lpn; ) 
     {
@@ -1388,7 +1426,7 @@ static uint64_t ssd_write(struct ssd *ssd, NvmeRequest *req)
         /* 如果lpn足够一个chunk，直接写QLC */
         if ((lpn % QLC_CHUNK_SIZE == 0) && ((lpn + QLC_CHUNK_SIZE - 1) <= end_lpn))
         {
-            valid_map = 1; // 设定valid map为1
+            valid_map = UINT64_MAX; // 设定valid map为1
             curlat = qlc_write(ssd, chunk_id, valid_map, req->stime); /* 10001 */
             maxlat = (curlat > maxlat) ? curlat : maxlat;
             lpn += QLC_CHUNK_SIZE; // 处理下一个chunk
@@ -1409,52 +1447,56 @@ static uint64_t ssd_write(struct ssd *ssd, NvmeRequest *req)
 
 static uint64_t ssd_read(struct ssd *ssd, NvmeRequest *req)
 {
-    struct ssdparams *spp = &ssd->sp;
+    struct ssdparams *spp = &ssd->qlc->sp;
     uint64_t lba = req->slba;
     int nsecs = req->nlb;
     struct ppa slc_ppa;
-    struct ppa qlc_ppa;
+    // struct ppa qlc_ppa;
+    struct nand_page *pg = NULL;
+    // struct ftl_mptl_qlc_entry *qlc_entry = NULL;
+    struct ftl_mptl_slc_entry *slc_entry = NULL;
+    
     uint64_t start_lpn = lba / spp->secs_per_pg;
     uint64_t end_lpn = (lba + nsecs - 1) / spp->secs_per_pg;
-    uint64_t lpn;
+    uint64_t lpn, offset;
     uint64_t sublat, maxlat = 0;
     uint64_t chunk_id;
-    uint64_t offset_within_chunk;
+    uint64_t start_bitmap, need_read = 0;
 
     if (end_lpn >= spp->tt_pgs) {
-        ftl_err("start_lpn=%"PRIu64",tt_pgs=%d\n", start_lpn, ssd->sp.tt_pgs);
+        ftl_err("start_lpn=%"PRIu64",tt_pgs=%d\n", start_lpn, spp->tt_pgs);
     }
+    offset = start_lpn % QLC_CHUNK_SIZE;
+    chunk_id = start_lpn / QLC_CHUNK_SIZE;
 
     /* normal IO read path */
-    for (lpn = start_lpn; lpn <= end_lpn; lpn++) {
+    for (lpn = chunk_id * QLC_CHUNK_SIZE; lpn <= end_lpn + QLC_CHUNK_SIZE - 1; lpn += QLC_CHUNK_SIZE) {
         // 去slc maptbl中找lpn,找到了去slc_read
-        chunk_id = lpn / QLC_CHUNK_SIZE;
-        offset_within_chunk = lpn % QLC_CHUNK_SIZE;
-        slc_ppa = get_slc_maptbl_ent(ssd, chunk_id);
-        
-        if (mapped_ppa(&slc_ppa) && valid_ppa(ssd->slc, &slc_ppa)) {
-            struct nand_cmd srd;
-            srd.type = USER_IO;
-            srd.cmd = NAND_READ;
-            srd.stime = req->stime;
-            sublat = ssd_advance_status(ssd, &slc_ppa, &srd);
-            maxlat = (sublat > maxlat) ? sublat : maxlat;
+        if(lpn == chunk_id * QLC_CHUNK_SIZE) {
+            start_bitmap = INT64_MAX - (1 << (QLC_CHUNK_SIZE - offset)) + 1;
+        } else if(lpn + QLC_CHUNK_SIZE > end_lpn) {
+            start_bitmap = (1 << (offset + 1)) - 1;
+        } else {
+            start_bitmap = INT64_MAX;
+        }
+
+        slc_entry = get_slc_maptbl_ent(ssd, chunk_id);
+        for (int i = 0; i < QLC_CHUNK_SIZE; i++) {
+            slc_ppa = slc_entry->ppa[i];
+            pg = get_pg(ssd->slc, &slc_ppa);
+            if(pg->status != PG_INVALID) {
+                need_read |= (1 << i);
+            }
+        }
+        need_read &= start_bitmap;
+        sublat = slc_read(ssd, lpn / QLC_CHUNK_SIZE, need_read, req->stime);
+
+        need_read |= start_bitmap;
+        if(!need_read) {
             continue;
         }
-
-        qlc_ppa = get_qlc_maptbl_ent(ssd, chunk_id);
-                // offset计算物理位置
-        if (!mapped_ppa(&qlc_ppa) || !valid_ppa(ssd, &qlc_ppa)) {
-            //printf("%s,lpn(%" PRId64 ") not mapped to valid ppa\n", ssd->ssdname, lpn);
-            //printf("Invalid ppa,ch:%d,lun:%d,blk:%d,pl:%d,pg:%d,sec:%d\n",
-            //ppa.g.ch, ppa.g.lun, ppa.g.blk, ppa.g.pl, ppa.g.pg, ppa.g.sec);
-        }
-
-        struct nand_cmd srd;
-        srd.type = USER_IO;
-        srd.cmd = NAND_READ;
-        srd.stime = req->stime;
-        sublat = ssd_advance_status(ssd, &qlc_ppa, &srd);
+        // qlc_entry = get_qlc_maptbl_ent(ssd, chunk_id);
+        sublat = qlc_read(ssd, lpn / QLC_CHUNK_SIZE, need_read, req->stime);
         maxlat = (sublat > maxlat) ? sublat : maxlat;
     }
 
