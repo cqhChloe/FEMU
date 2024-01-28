@@ -264,8 +264,15 @@ struct ftl_mapping_table {
     struct ftl_mptl_qlc_entry *qlc_l2p;
 };
 
+struct ftl_statistics {
+    uint64_t user_read_cnt;
+    uint64_t slc_read_cnt;
+    uint64_t qlc_read_cnt;
+};
+
 struct ssd {
     char *ssdname;
+    struct ftl_statistics *stat;
     struct ftl_mapping_table *maptbl;
     struct ssd_region *slc;
     struct ssd_region *qlc;

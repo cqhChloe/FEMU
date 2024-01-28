@@ -4,8 +4,8 @@
 #include <time.h> // for generate_length
 
 // #define FEMU_DEBUG_FTL
-// const char *femu_log_file_name = "/home/chenqihui/femu.log";
-const char *femu_log_file_name = "/home/wangshuai/femu.log";
+const char *femu_log_file_name = "/home/chenqihui/femu.log";
+// const char *femu_log_file_name = "/home/wangshuai/femu.log";
 FILE *femu_log_file = NULL;
 
 static void *ftl_thread(void *arg);
@@ -553,6 +553,8 @@ void ssd_init(FemuCtrl *n)
     }
     assert(femu_log_file);
 
+    ssd->stat = g_malloc0(sizeof(struct ftl_statistics));
+
     /* 打印 */
     ftl_flog("[FEMU_START] ");
 
@@ -885,7 +887,7 @@ static void gc_read_page(struct ssd_region *region, struct ppa *ppa)
 }
 
 /* move valid page data (already in DRAM) from victim line to a new page */
-static uint64_t gc_write_page(struct ssd *ssd, struct ppa *old_ppa, int gc_mode)
+static uint64_t gc_write_page(struct ssd *ssd, struct ppa *old_ppa)
 {
     // struct ssd_region *cleared_region = NULL;    
     // gc mode == slc->qlc, old_ppa in slc, new ppa in qlc
@@ -980,7 +982,7 @@ static void clean_one_block(struct ssd *ssd, struct ppa *ppa, int gc_mode)
         if (pg_iter->status == PG_VALID) {
             gc_read_page(region, ppa);
             /* delay the maptbl update until "write" happens */
-            gc_write_page(ssd, ppa, gc_mode);
+            gc_write_page(ssd, ppa);
             cnt++;
         }
     }
@@ -1115,6 +1117,7 @@ static uint64_t slc_read(struct ssd *ssd, uint64_t chunk_id, uint64_t bitmap, ui
             continue;
         }
         if (mapped_ppa(&ppa) && valid_ppa(ssd->slc, &ppa)) {
+            ssd->stat->slc_read_cnt += 1;
             struct nand_cmd srd;
             srd.type = USER_IO;
             srd.cmd = NAND_READ;
@@ -1149,6 +1152,7 @@ static uint64_t qlc_read(struct ssd *ssd, uint64_t chunk_id, uint64_t bitmap, ui
                 printf("%s,chunk(%" PRId64 ") [%d]not mapped to valid ppa\n", ssd->ssdname, chunk_id, idx);
                 continue;                
             }
+            ssd->stat->qlc_read_cnt += 1;
             struct nand_cmd srd;
             srd.type = USER_IO;
             srd.cmd = NAND_READ;
@@ -1455,6 +1459,8 @@ static uint64_t ssd_read(struct ssd *ssd, NvmeRequest *req)
     int start_chunk = start_lpn / QLC_CHUNK_SIZE;
     int end_chunk = end_lpn / QLC_CHUNK_SIZE;
 
+    ssd->stat->user_read_cnt += (end_lpn - start_lpn + 1);
+
     // const uint64_t valid_bitmap = (QLC_CHUNK_SIZE == 64) ? (UINT64_MAX) : ((((uint64_t)1) << QLC_CHUNK_SIZE) - 1);
 
     for (chunk_id = start_chunk; chunk_id <= end_chunk; ++chunk_id)
@@ -1498,6 +1504,12 @@ static uint64_t ssd_read(struct ssd *ssd, NvmeRequest *req)
     return maxlat;
 }
 
+static void debug_print(struct ssd *ssd)
+{
+    struct ftl_statistics *stat = ssd->stat;
+    ftl_flog("usr_rd=%lu, slc_rd=%lu, qlc_rd=%lu\n", stat->user_read_cnt, stat->slc_read_cnt, stat->qlc_read_cnt);
+}
+
 static void *ftl_thread(void *arg)
 {
     FemuCtrl *n = (FemuCtrl *)arg;
@@ -1506,6 +1518,9 @@ static void *ftl_thread(void *arg)
     uint64_t lat = 0;
     int rc;
     int i;
+
+    struct timeval last_time, current_time;
+    gettimeofday(&last_time, NULL);
 
     while (!*(ssd->dataplane_started_ptr)) {
         usleep(100000);
@@ -1516,6 +1531,12 @@ static void *ftl_thread(void *arg)
     ssd->to_poller = n->to_poller;
 
     while (1) {
+        gettimeofday(&current_time, NULL);
+        long seconds = (current_time.tv_sec - last_time.tv_sec);
+        if (seconds >= 1) {
+            debug_print(ssd);
+            last_time = current_time;
+        }
         for (i = 1; i <= n->num_poller; i++) {
             if (!ssd->to_ftl[i] || !femu_ring_count(ssd->to_ftl[i]))
                 continue;
