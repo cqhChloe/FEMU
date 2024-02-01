@@ -3,6 +3,8 @@
 
 #include "../nvme.h"
 
+#define FEMU_DEBUG_FTL
+
 #define INVALID_PPA     (~(0ULL))
 #define INVALID_LPN     (~(0ULL))
 #define UNMAPPED_PPA    (~(0ULL))

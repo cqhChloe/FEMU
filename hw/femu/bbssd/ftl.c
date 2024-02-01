@@ -342,12 +342,12 @@ static void ssd_init_params(struct ssdparams *spp, int nand_type)
 {
     if (nand_type == SLC_NAND) {
         spp->secsz = 512;
-        spp->secs_per_pg = 8;
-        spp->pgs_per_blk = 256;
-        spp->blks_per_pl = 16; /* ? GB */
-        spp->pls_per_lun = 1;
-        spp->luns_per_ch = 8;
-        spp->nchs = 2;
+        spp->secs_per_pg = 8;   /* page:    4KB   */
+        spp->pgs_per_blk = 256; /* block:   1MB   */
+        spp->blks_per_pl = 16;  /* plane:   16MB  */
+        spp->pls_per_lun = 1;   /* die/lun: 16MB  */
+        spp->luns_per_ch = 8;   /* channel: 128MB */
+        spp->nchs = 2;          /* slc:     256MB */
         spp->ttchks = 100;
 
         spp->pg_rd_lat = SLC_NAND_READ_LATENCY;
@@ -356,12 +356,12 @@ static void ssd_init_params(struct ssdparams *spp, int nand_type)
         spp->ch_xfer_lat = 0;        
     } else if (nand_type == QLC_NAND) {
         spp->secsz = 512;
-        spp->secs_per_pg = 8;
-        spp->pgs_per_blk = 256;
-        spp->blks_per_pl = 256; /* 16GB */
-        spp->pls_per_lun = 1;
-        spp->luns_per_ch = 8;
-        spp->nchs = 8;
+        spp->secs_per_pg = 8;   /* page:    4KB   */
+        spp->pgs_per_blk = 256; /* block:   1MB   */
+        spp->blks_per_pl = 64; /* plane:    64MB  */
+        spp->pls_per_lun = 1;   /* lun:     64MB  */
+        spp->luns_per_ch = 8;   /* channel: 512MB  */
+        spp->nchs = 8;          /* qlc:     4GB   */
 
         spp->pg_rd_lat = QLC_NAND_READ_LATENCY;
         spp->pg_wr_lat = QLC_NAND_PROG_LATENCY;
@@ -796,7 +796,9 @@ static void mark_page_invalid(struct ssd_region *region, struct ppa *ppa)
 
     /* update corresponding page status */
     pg = get_pg(region, ppa);
-    ftl_assert(pg->status == PG_VALID);
+    if (pg->status == PG_INVALID) return;
+    ftl_assert(pg->status != PG_FREE);
+    // ftl_assert(pg->status == PG_VALID);
     pg->status = PG_INVALID;
 
     /* update corresponding block status */
@@ -840,7 +842,9 @@ static void mark_page_valid(struct ssd_region *region, struct ppa *ppa)
 
     /* update page status */
     pg = get_pg(region, ppa);
-    ftl_assert(pg->status == PG_FREE);
+    if (pg->status == PG_VALID) return;
+    ftl_assert(pg->status != PG_INVALID);
+    // ftl_assert(pg->status == PG_FREE);
     pg->status = PG_VALID;
 
     /* update corresponding block status */
@@ -1132,7 +1136,7 @@ static void copy_line_slc2qlc(struct ssd *ssd, struct line *victim_line)
 
             lpn = chunk_id * QLC_CHUNK_SIZE + i;
             qlc_ppa = qlc_entry->ppa[i];
-            if (qlc_entry->valid_bitmap & (1 << i)) {
+            if (qlc_bitmap & (1 << i)) {
                 // 设置旧chunk无效
                 mark_page_invalid(ssd->qlc, &qlc_ppa); 
                 // 反向映射更新（置无效），全部都是chunkid
@@ -1281,7 +1285,7 @@ static void copy_line_qlc2qlc(struct ssd *ssd, struct line *victim_line)
 
             lpn = chunk_id * QLC_CHUNK_SIZE + i;
             qlc_ppa = qlc_entry->ppa[i];
-            if (qlc_entry->valid_bitmap & (1 << i)) {
+            if (qlc_bitmap & (1 << i)) {
                 // 设置旧chunk无效
                 mark_page_invalid(ssd->qlc, &qlc_ppa);
                 // 反向映射更新（置无效），全部都是chunkid
@@ -1551,7 +1555,7 @@ static uint64_t qlc_write(struct ssd *ssd, uint64_t chunk_id, uint64_t bitmap, u
 
         lpn = chunk_id * QLC_CHUNK_SIZE + i;
         ppa = entry->ppa[i];
-        if (entry->valid_bitmap & (1 << i)) {
+        if (old_bitmap & (1 << i)) {
             // 设置旧chunk无效
             mark_page_invalid(ssd->qlc, &ppa); // 需要修改？
             // 反向映射更新（置无效），全部都是chunkid
@@ -1571,6 +1575,7 @@ static uint64_t qlc_write(struct ssd *ssd, uint64_t chunk_id, uint64_t bitmap, u
         set_qlc_maptbl_ent(ssd, lpn, &ppa);
         set_rmap_ent(ssd->qlc, lpn, &ppa);
         mark_page_valid(ssd->qlc, &ppa);
+        
         // valid_bitmap更新
 
         if(residual_check >= NAND_PAGE_SIZE) {
@@ -1594,6 +1599,7 @@ static uint64_t qlc_write(struct ssd *ssd, uint64_t chunk_id, uint64_t bitmap, u
     entry->max_nbyte = max_size;
     if(residual_check) {
         cnt_chunk_len ++;
+        // FIXME:没有模拟写延迟
     }
     entry->len = cnt_chunk_len;
     ftl_flog("%s,lpn=%lu, ppa=%lu\n", __FUNCTION__, lpn, ppa.ppa);
