@@ -887,54 +887,45 @@ static void gc_read_page(struct ssd_region *region, struct ppa *ppa)
 }
 
 /* move valid page data (already in DRAM) from victim line to a new page */
-static uint64_t gc_write_page(struct ssd *ssd, struct ppa *old_ppa)
-{
-    // struct ssd_region *cleared_region = NULL;    
-    // gc mode == slc->qlc, old_ppa in slc, new ppa in qlc
-    // if (gc_mode == GC_SLC_TO_QLC) {
-    //     cleared_region = ssd->slc;
-    // } else if (gc_mode == GC_QLC) {
-    //     cleared_region = ssd->qlc;
-    // } else {
-    //     // 报错
-    // }
-    struct ssd_region *written_region = ssd->qlc;
+// static uint64_t gc_write_page(struct ssd *ssd, struct ppa *old_ppa)
+// {
+//     struct ssd_region *written_region = ssd->qlc;
 
-    // uint64_t lpn = get_rmap_ent(cleared_region, old_ppa); 
-    struct ppa new_ppa;
-    struct nand_lun *new_lun;
+//     // uint64_t lpn = get_rmap_ent(cleared_region, old_ppa); 
+//     struct ppa new_ppa;
+//     struct nand_lun *new_lun;
 
-    ftl_assert(valid_lpn(cleared_region, lpn));
-    new_ppa = get_new_page(written_region);
-    /* update maptbl */
-    // set_maptbl_ent(ssd, lpn, &new_ppa);
-    /* update rmap */
-    // set_rmap_ent(written_region, lpn, &new_ppa);
+//     ftl_assert(valid_lpn(cleared_region, lpn));
+//     new_ppa = get_new_page(written_region);
+//     /* update maptbl */
+//     // set_maptbl_ent(ssd, lpn, &new_ppa);
+//     /* update rmap */
+//     // set_rmap_ent(written_region, lpn, &new_ppa);
 
-    mark_page_valid(written_region, &new_ppa);
+//     mark_page_valid(written_region, &new_ppa);
 
-    /* need to advance the write pointer here */
-    ssd_advance_write_pointer(written_region);
+//     /* need to advance the write pointer here */
+//     ssd_advance_write_pointer(written_region);
 
-    if (written_region->sp.enable_gc_delay) {
-        struct nand_cmd gcw;
-        gcw.type = GC_IO;
-        gcw.cmd = NAND_WRITE;
-        gcw.stime = 0;
-        ssd_advance_status(written_region, &new_ppa, &gcw);
-    }
+//     if (written_region->sp.enable_gc_delay) {
+//         struct nand_cmd gcw;
+//         gcw.type = GC_IO;
+//         gcw.cmd = NAND_WRITE;
+//         gcw.stime = 0;
+//         ssd_advance_status(written_region, &new_ppa, &gcw);
+//     }
 
-    /* advance per-ch gc_endtime as well */
-#if 0
-    new_ch = get_ch(ssd, &new_ppa);
-    new_ch->gc_endtime = new_ch->next_ch_avail_time;
-#endif
+//     /* advance per-ch gc_endtime as well */
+// #if 0
+//     new_ch = get_ch(ssd, &new_ppa);
+//     new_ch->gc_endtime = new_ch->next_ch_avail_time;
+// #endif
 
-    new_lun = get_lun(written_region, &new_ppa);
-    new_lun->gc_endtime = new_lun->next_lun_avail_time;
+//     new_lun = get_lun(written_region, &new_ppa);
+//     new_lun->gc_endtime = new_lun->next_lun_avail_time;
 
-    return 0;
-}
+//     return 0;
+// }
 
 static struct line *select_victim_line(struct ssd_region *region, bool force)
 {
@@ -960,35 +951,35 @@ static struct line *select_victim_line(struct ssd_region *region, bool force)
 
 
 /* here ppa identifies the block we want to clean */
-static void clean_one_block(struct ssd *ssd, struct ppa *ppa, int gc_mode)
-{
-    struct ssd_region *region = NULL;    
-    if (gc_mode == GC_QLC) {
-        region = ssd->qlc;
-    } else if (gc_mode == GC_SLC_TO_QLC){
-        region = ssd->slc;
-    } else {
-        // ftl_err("Unsupported GC-mode %d when clean_one_block\n", gc_mode);
-    }
-    struct ssdparams *spp = &region->sp;
-    struct nand_page *pg_iter = NULL;
-    int cnt = 0;
+// static void clean_one_block(struct ssd *ssd, struct ppa *ppa, int gc_mode)
+// {
+//     struct ssd_region *region = NULL;    
+//     if (gc_mode == GC_QLC) {
+//         region = ssd->qlc;
+//     } else if (gc_mode == GC_SLC_TO_QLC){
+//         region = ssd->slc;
+//     } else {
+//         // ftl_err("Unsupported GC-mode %d when clean_one_block\n", gc_mode);
+//     }
+//     struct ssdparams *spp = &region->sp;
+//     struct nand_page *pg_iter = NULL;
+//     int cnt = 0;
 
-    for (int pg = 0; pg < spp->pgs_per_blk; pg++) {
-        ppa->g.pg = pg;
-        pg_iter = get_pg(region, ppa);
-        /* there shouldn't be any free page in victim blocks */
-        ftl_assert(pg_iter->status != PG_FREE);
-        if (pg_iter->status == PG_VALID) {
-            gc_read_page(region, ppa);
-            /* delay the maptbl update until "write" happens */
-            gc_write_page(ssd, ppa);
-            cnt++;
-        }
-    }
+//     for (int pg = 0; pg < spp->pgs_per_blk; pg++) {
+//         ppa->g.pg = pg;
+//         pg_iter = get_pg(region, ppa);
+//         /* there shouldn't be any free page in victim blocks */
+//         ftl_assert(pg_iter->status != PG_FREE);
+//         if (pg_iter->status == PG_VALID) {
+//             gc_read_page(region, ppa);
+//             /* delay the maptbl update until "write" happens */
+//             gc_write_page(ssd, ppa);
+//             cnt++;
+//         }
+//     }
 
-    ftl_assert(get_blk(region, ppa)->vpc == cnt);
-}
+//     ftl_assert(get_blk(region, ppa)->vpc == cnt);
+// }
 
 static void mark_line_free(struct ssd_region *region, struct ppa *ppa)
 {
@@ -1143,7 +1134,7 @@ static void copy_line_slc2qlc(struct ssd *ssd, struct line *victim_line)
             qlc_ppa = qlc_entry->ppa[i];
             if (qlc_entry->valid_bitmap & (1 << i)) {
                 // 设置旧chunk无效
-                mark_page_invalid(ssd->qlc, &qlc_ppa); // 需要修改？
+                mark_page_invalid(ssd->qlc, &qlc_ppa); 
                 // 反向映射更新（置无效），全部都是chunkid
                 set_rmap_ent(ssd->qlc, INVALID_LPN, &qlc_ppa);
             }
@@ -1187,6 +1178,15 @@ static void copy_line_slc2qlc(struct ssd *ssd, struct line *victim_line)
         qlc_entry->len = cnt_chunk_len;
     }
 
+    for (int ch = 0; ch < slc_sp->nchs; ch++) {
+        for (int lun = 0; lun < slc_sp->luns_per_ch; lun++) {
+            slc_ppa.g.ch = ch;
+            slc_ppa.g.lun = lun;
+            slc_ppa.g.pl = 0;
+            mark_block_free(slc, &slc_ppa);
+        }
+    }
+
     /* update line status */
     mark_line_free(slc, &slc_ppa);
 
@@ -1197,53 +1197,203 @@ static void copy_line_slc2qlc(struct ssd *ssd, struct line *victim_line)
     return;
 }
 
-// TODO: flush SLC datas when qlc gc
-static void copy_back_valid_data(struct ssd *ssd, struct line *victim_line, int gc_mode)
-{    
-    int ch, lun;
-    struct nand_lun *lunp = NULL;
-    struct ssd_region *region = NULL;
-    struct ppa ppa;
-    struct ssdparams *spp = &region->sp;    
-    
-    if (gc_mode == GC_QLC) {
-        region = ssd->qlc;
-    } else if (gc_mode == GC_SLC_TO_QLC){
-        region = ssd->slc;
-    } else {
-        ftl_err("Unsupported GC-mode %d when copy_back_valid_data", gc_mode);
-    }   
+static void copy_line_qlc2qlc(struct ssd *ssd, struct line *victim_line)
+{
+    struct ssd_region *qlc = ssd->qlc;
+    struct ssdparams *qlc_sp = &qlc->sp;
+    struct nand_page *pagep = NULL;
+    struct ftl_mptl_slc_entry *slc_entry = NULL;
+    struct ftl_mptl_qlc_entry *qlc_entry = NULL;
 
-    ppa.g.blk = victim_line->id;
-    ftl_debug("GC-ing line:%d,ipc=%d,victim=%d,full=%d,free=%d\n", ppa.g.blk,
-              victim_line->ipc, ssd->lm.victim_line_cnt, ssd->lm.full_line_cnt,
-              ssd->lm.free_line_cnt);
-               
-    /* copy back valid data */
-    for (ch = 0; ch < spp->nchs; ch++) {
-        for (lun = 0; lun < spp->luns_per_ch; lun++) {
-            ppa.g.ch = ch;
-            ppa.g.lun = lun;
-            ppa.g.pl = 0;
-            
-            lunp = get_lun(region, &ppa);
-            clean_one_block(ssd, &ppa, gc_mode);
-            mark_block_free(region, &ppa);            
-            
-            if (spp->enable_gc_delay) {
-                struct nand_cmd gce;
-                gce.type = GC_IO;
-                gce.cmd = NAND_ERASE;
-                gce.stime = 0;
-                ssd_advance_status(region, &ppa, &gce);
+    uint64_t lpn = 0;
+    uint32_t max_size = 0;
+    uint32_t aligned_size = 0;
+    uint64_t qlc_bitmap = 0;
+    uint64_t slc_bitmap = 0;    /* slc的有效位图 */
+    int residual_check = 0;
+    int cnt_chunk_len = 0;
+    uint64_t alignment = 0;
+
+    uint32_t *involved_chunks = NULL;
+ 
+    /* 遍历所有的page，看涉及到哪些chunk */
+    // struct ppa slc_ppa;
+    struct ppa qlc_ppa;
+    qlc_ppa.ppa = 0;
+    qlc_ppa.g.blk = victim_line->id;
+    for (int ch = 0; ch < qlc_sp->nchs; ch++) {
+        for (int lun = 0; lun < qlc_sp->luns_per_ch; lun++) {
+            qlc_ppa.g.ch = ch;
+            qlc_ppa.g.lun = lun;
+            qlc_ppa.g.pl = 0;
+            for (int pg = 0; pg < qlc_sp->pgs_per_blk; pg ++) {
+                pagep = get_pg(qlc, &qlc_ppa);
+                if (pagep->status == PG_VALID)
+                {
+                    lpn = get_rmap_ent(qlc, &qlc_ppa);
+                    involved_chunks[lpn / QLC_CHUNK_SIZE] = 1;
+                }
             }
-
-            lunp->gc_endtime = lunp->next_lun_avail_time;
         }
     }
+
+    /* 遍历涉及chunk中的所有页，先slc_read，slc中没有的qlc读 */
+    /* 迁移所有涉及到的chunk */
+    for (int chunk_id = 0; chunk_id < TT_CHUNKS; ++chunk_id)
+    {
+        if (involved_chunks[chunk_id] == 0)
+        {
+            continue;
+        }
+
+        /* 迁移整个chunk到QLC */
+        slc_entry = get_slc_maptbl_ent(ssd, chunk_id);
+        qlc_entry = get_qlc_maptbl_ent(ssd, chunk_id);
+        slc_bitmap = 0;
+        qlc_bitmap = qlc_entry->valid_bitmap;
+        residual_check = 0;
+        cnt_chunk_len = 0;
+        alignment = 0;
+        for (int offset = 0; offset < QLC_CHUNK_SIZE; ++offset)
+        {
+            if (mapped_ppa(&slc_entry->ppa[offset]))
+            {
+                slc_bitmap |= (((uint64_t)1) << offset);
+                gc_read_page(ssd->slc, &slc_entry->ppa[offset]);
+                qlc_entry->nbytes[offset] = slc_entry->nbytes[offset];
+            }
+        }
+
+        qlc_read(ssd, chunk_id, qlc_bitmap & (~slc_bitmap), 0);
+        max_size = max_aligned_size();
+        aligned_size = calculate_aligned_size(qlc_entry->nbytes);
+
+        qlc_entry->valid_bitmap = slc_bitmap | qlc_bitmap;
+
+        /* 写新的数据 old_bitmap | new_bitmap LPN数量 */
+        for (int i = 0; i < QLC_CHUNK_SIZE; ++i)
+        {
+            if (((1 << i) & qlc_entry->valid_bitmap) == 0)
+            {
+                set_qlc_maptbl_ent(ssd, lpn, NULL);
+                continue;
+            }
+
+            lpn = chunk_id * QLC_CHUNK_SIZE + i;
+            qlc_ppa = qlc_entry->ppa[i];
+            if (qlc_entry->valid_bitmap & (1 << i)) {
+                // 设置旧chunk无效
+                mark_page_invalid(ssd->qlc, &qlc_ppa);
+                // 反向映射更新（置无效），全部都是chunkid
+                set_rmap_ent(ssd->qlc, INVALID_LPN, &qlc_ppa);
+            }
+
+            /* FIXME:加入压缩拼接的逻辑 */
+            qlc_ppa = get_new_page(ssd->qlc);
+
+            if (qlc_entry->nbytes[i] > aligned_size) {
+                residual_check += max_size;           
+                alignment |= (1 << i);
+            } else {
+                residual_check += aligned_size;
+            }
+            // 记录maptbl[lcn] = sppn,nbyetes[i] = gen_len[i],avg_nbyte,max_nbyte,chunk的物理页数len, bitmap里设置对齐方式
+            set_qlc_maptbl_ent(ssd, lpn, &qlc_ppa);
+            set_rmap_ent(ssd->qlc, lpn, &qlc_ppa);
+            mark_page_valid(ssd->qlc, &qlc_ppa);
+            // valid_bitmap更新
+
+            if (residual_check >= NAND_PAGE_SIZE) {
+                cnt_chunk_len ++;
+                ssd_advance_write_pointer(ssd->qlc);
+                residual_check %= NAND_PAGE_SIZE;
+
+                // 计算latency
+                struct nand_cmd swr;
+                swr.type = USER_IO;
+                swr.cmd = NAND_WRITE;
+                swr.stime = 0;
+                /* get latency statistics */
+                ssd_advance_status(ssd->qlc, &qlc_ppa, &swr);
+            }
+        } 
+        // => 多少个PPA
+        qlc_entry->alignment_bitmap = alignment;
+        qlc_entry->avg_nbyte = aligned_size;
+        qlc_entry->max_nbyte = max_size;
+        if(residual_check) {
+            cnt_chunk_len ++;
+        }
+        qlc_entry->len = cnt_chunk_len;
+    }
+
+    for (int ch = 0; ch < qlc_sp->nchs; ch++) {
+        for (int lun = 0; lun < qlc_sp->luns_per_ch; lun++) {
+            qlc_ppa.g.ch = ch;
+            qlc_ppa.g.lun = lun;
+            qlc_ppa.g.pl = 0;
+            mark_block_free(qlc, &qlc_ppa);
+        }
+    }
+
     /* update line status */
-    mark_line_free(region, &ppa);
+    mark_line_free(qlc, &qlc_ppa);
+
+    /* 释放chunk数组 */
+    free(involved_chunks);
+    involved_chunks = NULL;
+
+    return;
 }
+
+// TODO: flush SLC datas when qlc gc
+// static void copy_back_valid_data(struct ssd *ssd, struct line *victim_line, int gc_mode)
+// {    
+//     int ch, lun;
+//     struct nand_lun *lunp = NULL;
+//     struct ssd_region *region = NULL;
+//     struct ppa ppa;
+//     struct ssdparams *spp = &region->sp;
+    
+//     if (gc_mode == GC_QLC) {
+//         region = ssd->qlc;
+//     } else if (gc_mode == GC_SLC_TO_QLC){
+//         region = ssd->slc;
+//     } else {
+//         ftl_err("Unsupported GC-mode %d when copy_back_valid_data", gc_mode);
+//     }
+
+
+//     ppa.g.blk = victim_line->id;
+//     ftl_debug("GC-ing line:%d,ipc=%d,victim=%d,full=%d,free=%d\n", ppa.g.blk,
+//               victim_line->ipc, ssd->lm.victim_line_cnt, ssd->lm.full_line_cnt,
+//               ssd->lm.free_line_cnt);
+               
+//     /* copy back valid data */
+//     for (ch = 0; ch < spp->nchs; ch++) {
+//         for (lun = 0; lun < spp->luns_per_ch; lun++) {
+//             ppa.g.ch = ch;
+//             ppa.g.lun = lun;
+//             ppa.g.pl = 0;
+            
+//             lunp = get_lun(region, &ppa);
+//             clean_one_block(ssd, &ppa, gc_mode);
+//             mark_block_free(region, &ppa);            
+            
+//             if (spp->enable_gc_delay) {
+//                 struct nand_cmd gce;
+//                 gce.type = GC_IO;
+//                 gce.cmd = NAND_ERASE;
+//                 gce.stime = 0;
+//                 ssd_advance_status(region, &ppa, &gce);
+//             }
+
+//             lunp->gc_endtime = lunp->next_lun_avail_time;
+//         }
+//     }
+//     /* update line status */
+//     mark_line_free(region, &ppa);
+// }
 
 static int do_gc_qlc(struct ssd *ssd, bool force)
 {
@@ -1254,7 +1404,9 @@ static int do_gc_qlc(struct ssd *ssd, bool force)
     if (!victim_line) {
         return -1;
     }
-    copy_back_valid_data(ssd, victim_line, GC_QLC);
+    ftl_flog("#QLC GC:victim line = %lu \n", victim_line->id);
+
+    copy_line_qlc2qlc(ssd, victim_line);
 
     return -1;
 }
@@ -1277,6 +1429,7 @@ static int do_gc_slc(struct ssd *ssd, bool force)
     if (!victim_line) {
         return -1;
     }
+    ftl_flog("#SLC GC:victim line = %lu \n", victim_line->id);
 
     // copy_back_valid_data(ssd, victim_line, GC_SLC_TO_QLC);
     copy_line_slc2qlc(ssd, victim_line);
@@ -1443,6 +1596,7 @@ static uint64_t qlc_write(struct ssd *ssd, uint64_t chunk_id, uint64_t bitmap, u
         cnt_chunk_len ++;
     }
     entry->len = cnt_chunk_len;
+    ftl_flog("%s,lpn=%lu, ppa=%lu\n", __FUNCTION__, lpn, ppa.ppa);
 
     return readlat + maxlat;    
 }
@@ -1507,6 +1661,7 @@ static uint64_t slc_write(struct ssd *ssd, uint64_t lpn, uint64_t stime)
     swr.stime = stime;
 
     lat = ssd_advance_status(ssd->slc, &ppa, &swr);
+    ftl_flog("%s,lpn=%lu, ppa=%lu\n", __FUNCTION__, lpn, ppa.ppa);
 
     return lat;
 }
@@ -1514,6 +1669,7 @@ static uint64_t slc_write(struct ssd *ssd, uint64_t lpn, uint64_t stime)
 static uint64_t ssd_write(struct ssd *ssd, NvmeRequest *req)
 {
     struct ssdparams *qlc_spp = &ssd->qlc->sp;
+    struct ftl_mptl_slc_entry *slc_entry = NULL;
     uint64_t lpn = 0;
     uint64_t chunk_id = 0;
     uint64_t curlat = 0;
@@ -1525,6 +1681,8 @@ static uint64_t ssd_write(struct ssd *ssd, NvmeRequest *req)
     int nsecs = req->nlb;
     uint64_t start_lpn = lba / qlc_spp->secs_per_pg;
     uint64_t end_lpn = (lba + nsecs - 1) / qlc_spp->secs_per_pg;
+
+    ftl_flog("*****\n WRITE: %s, start_lpn=%lu, end_lpn=%lu\n", __FUNCTION__, start_lpn, end_lpn);
 
     /* 判断地址范围的合法性 */
     if (end_lpn >= TT_LPNS)
@@ -1541,10 +1699,14 @@ static uint64_t ssd_write(struct ssd *ssd, NvmeRequest *req)
         /* 如果lpn足够一个chunk，直接写QLC */
         if ((lpn % QLC_CHUNK_SIZE == 0) && ((lpn + QLC_CHUNK_SIZE - 1) <= end_lpn))
         {
+            slc_entry = get_slc_maptbl_ent(ssd, chunk_id);
+            for (int i = 0; i < QLC_CHUNK_SIZE; i++) {
+                if(slc_entry->ppa[i].ppa != UNMAPPED_PPA){
+                    mark_page_invalid(ssd->slc, &slc_entry->ppa[i]);
+                }
+            }
             valid_map = UINT64_MAX; // 设定valid map为1
-
             curlat = qlc_write(ssd, chunk_id, valid_map, req->stime);
-
             maxlat = (curlat > maxlat) ? curlat : maxlat;
             lpn += QLC_CHUNK_SIZE; // 处理下一个chunk
         }
