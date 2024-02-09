@@ -3,7 +3,7 @@
 #include <stdarg.h>
 #include <time.h> // for generate_length
 
-// #define FEMU_DEBUG_FTL
+#define FEMU_DEBUG_FTL
 const char *femu_log_file_name = "/home/chenqihui/femu.log";
 // const char *femu_log_file_name = "/home/wangshuai/femu.log";
 FILE *femu_log_file = NULL;
@@ -21,7 +21,6 @@ static void ftl_print_para(struct ssd *ssd);
  */
 static inline uint32_t generate_length(void)
 {
-    srand(time(NULL)); 
     int len = rand() % 4096;
     return len;
 }
@@ -525,6 +524,9 @@ void ssd_init(FemuCtrl *n)
     struct ssd *ssd = n->ssd;
     struct ssd_region *slc = NULL;
     struct ssd_region *qlc = NULL;
+
+    /* 初始化随机数种子 */
+    srand(time(NULL)); 
 
     /* 分配SLC和QLC结构体空间 */
     if (ssd->slc == NULL)
@@ -1565,6 +1567,10 @@ static uint64_t qlc_write(struct ssd *ssd, uint64_t chunk_id, uint64_t bitmap, u
         /* FIXME:加入压缩拼接的逻辑 */
         ppa = get_new_page(ssd->qlc);
 
+#ifdef FEMU_DEBUG_FTL
+        ftl_flog("%s,lpn=%lu, pgidx=%lu, page_bytes=%u\n", __FUNCTION__, lpn, ppa2pgidx(ssd->qlc, &ppa), entry->nbytes[i]);
+#endif // FEMU_DEBUG_FTL
+
         if(entry->nbytes[i] > aligned_size) {
             residual_check += max_size;           
             alignment |= (1 << i);
@@ -1602,7 +1608,6 @@ static uint64_t qlc_write(struct ssd *ssd, uint64_t chunk_id, uint64_t bitmap, u
         // FIXME:没有模拟写延迟
     }
     entry->len = cnt_chunk_len;
-    ftl_flog("%s,lpn=%lu, ppa=%lu\n", __FUNCTION__, lpn, ppa.ppa);
 
     return readlat + maxlat;    
 }
@@ -1667,7 +1672,11 @@ static uint64_t slc_write(struct ssd *ssd, uint64_t lpn, uint64_t stime)
     swr.stime = stime;
 
     lat = ssd_advance_status(ssd->slc, &ppa, &swr);
-    ftl_flog("%s,lpn=%lu, ppa=%lu\n", __FUNCTION__, lpn, ppa.ppa);
+
+#ifdef FEMU_DEBUG_FTL
+    // ftl_flog("%s,lpn=%lu, ppa=%lu\n", __FUNCTION__, lpn, ppa.ppa);
+    ftl_flog("%s,lpn=%lu, pgidx=%lu\n", __FUNCTION__, lpn, ppa2pgidx(ssd->slc, &ppa));
+#endif // FEMU_DEBUG_FTL
 
     return lat;
 }

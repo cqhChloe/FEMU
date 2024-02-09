@@ -11,14 +11,14 @@
 
 /* 一些配置，可以配置做不同的实验 */
 #define SSD_SIZE_MB     (2048)                  // SSD的逻辑空间大小，单位：MB（决定了映射表的大小, 需要和run-blackbox.sh保持一致）
-#define PAGE_SIZE_SHIFT (12)
+#define PAGE_SIZE_SHIFT (12)                    // Page的位数（4KiB）
 #define NAND_PAGE_SIZE  (1 << PAGE_SIZE_SHIFT)  // 4096字节
 #define SLC_CHUNK_SIZE  (1)                     // SLC以4KiB为粒度映射 (1个page)
 #define QLC_CHUNK_SIZE  (16)                    // QLC以64KiB为粒度映射（16个page），最大支持64
 
 /* 可计算的配置 */
 #define TT_LPNS ((SSD_SIZE_MB) * (1024 / (NAND_PAGE_SIZE / 1024)))  // FTL需要维护的LPN数量
-#define TT_CHUNKS ((TT_LPNS + QLC_CHUNK_SIZE -1 ) / QLC_CHUNK_SIZE)
+#define TT_CHUNKS ((TT_LPNS + QLC_CHUNK_SIZE -1 ) / QLC_CHUNK_SIZE) // FTL需要维护的chunk数量
 
 /* NAND cell type */
 enum NAND_CELL_TYPE {
