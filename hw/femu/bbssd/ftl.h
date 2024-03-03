@@ -3,7 +3,7 @@
 
 #include "../nvme.h"
 
-#define FEMU_DEBUG_FTL
+#define FEMU_DEBUG_FTL  // Debug开关，加入了一些异常检查
 
 #define INVALID_PPA     (~(0ULL))
 #define INVALID_LPN     (~(0ULL))
@@ -37,13 +37,13 @@ enum NAND_OP {
 
 /* Operation Latency */
 enum NAND_OP_LATS {
-    SLC_NAND_READ_LATENCY = 40000,
-    SLC_NAND_PROG_LATENCY = 200000,
-    SLC_NAND_ERASE_LATENCY = 2000000,
+    SLC_NAND_READ_LATENCY = 25000,      // 25 us
+    SLC_NAND_PROG_LATENCY = 200000,     // 200 us
+    SLC_NAND_ERASE_LATENCY = 1500000,   // 1500 us
 
-    QLC_NAND_READ_LATENCY = 40000,
-    QLC_NAND_PROG_LATENCY = 200000,
-    QLC_NAND_ERASE_LATENCY = 2000000,
+    QLC_NAND_READ_LATENCY = 140000,     // 140 us
+    QLC_NAND_PROG_LATENCY = 2000000,    // 2 ms
+    QLC_NAND_ERASE_LATENCY = 15000000,  // 15 ms
 };
 
 /* IO source */
@@ -266,10 +266,34 @@ struct ftl_mapping_table {
     struct ftl_mptl_qlc_entry *qlc_l2p;
 };
 
+/* 统计参数 */
 struct ftl_statistics {
-    uint64_t user_read_cnt;
-    uint64_t slc_read_cnt;
-    uint64_t qlc_read_cnt;
+    /* 统计计数 - 读 (4KB级别) */
+    uint64_t user_read_cnt_lpn;
+    uint64_t slc_read_cnt_lpn;
+    uint64_t qlc_read_cnt_lpn;
+    uint64_t slc_read_cnt_ppn;
+    uint64_t qlc_read_cnt_ppn;
+    uint64_t qlc_cross_page_read_cnt;   // QLC部分跨页读的请求数量 （因为压缩拼接的关系）
+
+    /* 统计计数 - 写 (4KB级别) */
+    uint64_t user_write_cnt_lpn;
+    uint64_t slc_write_cnt_lpn;
+    uint64_t slc_write_cnt_ppn;
+    uint64_t qlc_write_cnt_lpn;
+    uint64_t qlc_write_cnt_ppn;
+    uint64_t qlc_gc_from_slc_ppn;
+    uint64_t qlc_gc_from_qlc_ppn;
+
+    /* 性能指标-延迟 (req级别) */
+    uint32_t avg_rlats_us;      // 每秒的平均读延迟
+    uint32_t avg_wlats_us;      // 每秒的平均写延迟
+    uint32_t avg_lats_us;       // 每秒的平均延迟（读写都算）
+
+    /* 性能指标-带宽 (req级别) */
+    uint32_t avg_rbw_kb_s;      // 每秒的平均读带宽
+    uint32_t avg_wbw_kb_s;      // 每秒的平均写带宽
+    uint32_t abg_bw_kb_s;       // 每秒的平均带宽
 };
 
 struct ssd {
