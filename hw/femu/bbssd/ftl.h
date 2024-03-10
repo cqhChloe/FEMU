@@ -286,14 +286,20 @@ struct ftl_statistics {
     uint64_t qlc_gc_from_qlc_ppn;
 
     /* 性能指标-延迟 (req级别) */
+    uint32_t tt_rlats_us;       // 每秒的总读延迟
+    uint32_t tt_rreq_cnt;       // 每秒的总读请求数
     uint32_t avg_rlats_us;      // 每秒的平均读延迟
+    uint32_t tt_wlats_us;       // 每秒的总写延迟
+    uint32_t tt_wreq_cnt;       // 每秒的总写请求数
     uint32_t avg_wlats_us;      // 每秒的平均写延迟
+    uint32_t tt_lats_us;        // 每秒的总请求延迟
+    uint32_t tt_req_cnt;        // 每秒总请求数
     uint32_t avg_lats_us;       // 每秒的平均延迟（读写都算）
 
     /* 性能指标-带宽 (req级别) */
     uint32_t avg_rbw_kb_s;      // 每秒的平均读带宽
     uint32_t avg_wbw_kb_s;      // 每秒的平均写带宽
-    uint32_t abg_bw_kb_s;       // 每秒的平均带宽
+    uint32_t avg_bw_kb_s;       // 每秒的平均带宽
 };
 
 struct ssd {

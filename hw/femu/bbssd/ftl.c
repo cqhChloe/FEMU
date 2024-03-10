@@ -10,8 +10,40 @@ FILE *femu_log_file = NULL;
 
 static void *ftl_thread(void *arg);
 
-static void ftl_print_time(struct ssd *ssd);
+static void ftl_print_time(void);
 static void ftl_print_para(struct ssd *ssd);
+
+static void ftl_1s_timer(struct ssd *ssd);
+static uint32_t count_bits(uint32_t num);
+
+const uint8_t bitCountTable[256] = {
+    0, 1, 1, 2, 1, 2, 2, 3, 1, 2, 2, 3, 2, 3, 3, 4,
+    1, 2, 2, 3, 2, 3, 3, 4, 2, 3, 3, 4, 3, 4, 4, 5,
+    1, 2, 2, 3, 2, 3, 3, 4, 2, 3, 3, 4, 3, 4, 4, 5,
+    2, 3, 3, 4, 3, 4, 4, 5, 3, 4, 4, 5, 4, 5, 5, 6,
+    1, 2, 2, 3, 2, 3, 3, 4, 2, 3, 3, 4, 3, 4, 4, 5,
+    2, 3, 3, 4, 3, 4, 4, 5, 3, 4, 4, 5, 4, 5, 5, 6,
+    2, 3, 3, 4, 3, 4, 4, 5, 3, 4, 4, 5, 4, 5, 5, 6,
+    3, 4, 4, 5, 4, 5, 5, 6, 4, 5, 5, 6, 5, 6, 6, 7,
+    1, 2, 2, 3, 2, 3, 3, 4, 2, 3, 3, 4, 3, 4, 4, 5,
+    2, 3, 3, 4, 3, 4, 4, 5, 3, 4, 4, 5, 4, 5, 5, 6,
+    2, 3, 3, 4, 3, 4, 4, 5, 3, 4, 4, 5, 4, 5, 5, 6,
+    3, 4, 4, 5, 4, 5, 5, 6, 4, 5, 5, 6, 5, 6, 6, 7,
+    2, 3, 3, 4, 3, 4, 4, 5, 3, 4, 4, 5, 4, 5, 5, 6,
+    3, 4, 4, 5, 4, 5, 5, 6, 4, 5, 5, 6, 5, 6, 6, 7,
+    3, 4, 4, 5, 4, 5, 5, 6, 4, 5, 5, 6, 5, 6, 6, 7,
+    4, 5, 5, 6, 5, 6, 6, 7, 5, 6, 6, 7, 6, 7, 7, 8
+};
+
+/* 为了提升效率，这里直接采用查表法； */
+static uint32_t count_bits(uint32_t num)
+{
+    int count = 0;
+    for (int i = 0; i < 4; ++i) {
+        count += bitCountTable[(num >> (i * 8)) & 0xFF];
+    }
+    return count;
+}
 
 /*
  * \brief 对于给定的LPN，随机生成其物理字节数
@@ -587,7 +619,7 @@ void ssd_init(FemuCtrl *n)
     ssd_init_params(slc_spp, SLC_NAND);
     ssd_init_params(qlc_spp, QLC_NAND);
 
-    ftl_print_time(ssd);
+    ftl_print_time();
     ftl_print_para(ssd);
 
     /* initialize ssd internal layout architecture */
@@ -645,6 +677,11 @@ static inline bool valid_lpn(struct ssd_region *region, uint64_t lpn)
 static inline bool mapped_ppa(struct ppa *ppa)
 {
     return !(ppa->ppa == UNMAPPED_PPA);
+}
+
+static inline bool same_ppa(struct ppa *ppa1, struct ppa *ppa2)
+{
+    return ((ppa1->ppa == ppa2->ppa));
 }
 
 static inline struct ssd_channel *get_ch(struct ssd_region *region, struct ppa *ppa)
@@ -1038,7 +1075,7 @@ static uint32_t max_aligned_size(void) {
 static uint64_t qlc_read(struct ssd *ssd, uint64_t chunk_id, uint64_t bitmap, uint64_t stime)
 {
     struct ssdparams *spp = &ssd->qlc->sp;
-    struct ppa ppa;
+    struct ppa ppa, last_ppa;
     int lens = QLC_CHUNK_SIZE;
     struct ftl_mptl_qlc_entry *entry = NULL;
     uint64_t start_lpn = chunk_id * QLC_CHUNK_SIZE;
@@ -1049,14 +1086,18 @@ static uint64_t qlc_read(struct ssd *ssd, uint64_t chunk_id, uint64_t bitmap, ui
     }
 
     entry = get_qlc_maptbl_ent(ssd, chunk_id);
-     
+    last_ppa.ppa = INVALID_PPA;
+
     for (int idx = 0; idx < QLC_CHUNK_SIZE; idx ++){
         if((bitmap & (((uint64_t)1)<<idx)) != 0) {
             ppa = entry->ppa[idx];
-            if (!mapped_ppa(&ppa)) {
+            if (!mapped_ppa(&ppa) || same_ppa(&ppa, &last_ppa)) {
                 printf("%s,chunk(%" PRId64 ") [%d]not mapped to valid ppa\n", ssd->ssdname, chunk_id, idx);
                 continue;                
             }
+
+            last_ppa.ppa = ppa.ppa;
+
             ssd->stat->qlc_read_cnt_lpn += 1;
             struct nand_cmd srd;
             srd.type = USER_IO;
@@ -1140,6 +1181,7 @@ static void copy_line_slc2qlc(struct ssd *ssd, struct line *victim_line)
                 slc_bitmap |= (((uint64_t)1) << offset);
                 gc_read_page(slc, &slc_entry->ppa[offset]);
                 qlc_entry->nbytes[offset] = slc_entry->nbytes[offset];
+                ssd->stat->qlc_gc_from_slc_ppn ++;
             }
         }
 
@@ -1291,6 +1333,7 @@ static void copy_line_qlc2qlc(struct ssd *ssd, struct line *victim_line)
                 slc_bitmap |= (((uint64_t)1) << offset);
                 gc_read_page(ssd->slc, &slc_entry->ppa[offset]);
                 qlc_entry->nbytes[offset] = slc_entry->nbytes[offset];
+                ssd->stat->qlc_gc_from_qlc_ppn ++;
             }
         }
 
@@ -1640,6 +1683,8 @@ static uint64_t qlc_write(struct ssd *ssd, uint64_t chunk_id, uint64_t bitmap, u
     }
     entry->len = cnt_chunk_len;
 
+    ssd->stat->qlc_write_cnt_ppn += cnt_chunk_len;
+
     return readlat + maxlat;    
 }
 
@@ -1745,6 +1790,8 @@ static uint64_t ssd_write(struct ssd *ssd, NvmeRequest *req)
     /* 统计：user写page数 */
     stat = ssd->stat;
     stat->user_write_cnt_lpn += (end_lpn - start_lpn + 1);
+    stat->avg_wbw_kb_s += ((end_lpn - start_lpn + 1)) * 4;
+    stat->avg_bw_kb_s += ((end_lpn - start_lpn + 1)) * 4;
 
     /* 处理写请求 */
     for (lpn = start_lpn; lpn <= end_lpn; ) 
@@ -1761,6 +1808,7 @@ static uint64_t ssd_write(struct ssd *ssd, NvmeRequest *req)
                 }
             }
             valid_map = UINT64_MAX; // 设定valid map为1
+
             curlat = qlc_write(ssd, chunk_id, valid_map, req->stime);
             maxlat = (curlat > maxlat) ? curlat : maxlat;
             lpn += QLC_CHUNK_SIZE; // 处理下一个chunk
@@ -1770,12 +1818,19 @@ static uint64_t ssd_write(struct ssd *ssd, NvmeRequest *req)
         {
             curlat = slc_write(ssd, lpn, req->stime);
 
+            stat->slc_write_cnt_ppn += 1;
+
             maxlat = (curlat > maxlat) ? curlat : maxlat;
 
             lpn += 1; // 处理下一个lpn
         }
         // TODO: slc如果满了就拼接并迁移到QLC
     }
+
+    stat->tt_wlats_us += maxlat;
+    stat->tt_wreq_cnt ++;
+    stat->tt_lats_us += maxlat;
+    stat->tt_req_cnt ++;
 
     return maxlat;
 }
@@ -1826,6 +1881,12 @@ static uint64_t ssd_read(struct ssd *ssd, NvmeRequest *req)
     int start_chunk = start_lpn / QLC_CHUNK_SIZE;
     int end_chunk = end_lpn / QLC_CHUNK_SIZE;
 
+    /* 统计：user读page数 */
+    struct ftl_statistics *stat = ssd->stat;
+    stat->user_read_cnt_lpn += (end_lpn - start_lpn + 1);
+    stat->avg_rbw_kb_s += ((end_lpn - start_lpn + 1)) * 4;
+    stat->avg_bw_kb_s += ((end_lpn - start_lpn + 1)) * 4;
+
     ssd->stat->user_read_cnt_lpn += (end_lpn - start_lpn + 1);
 
     // const uint64_t valid_bitmap = (QLC_CHUNK_SIZE == 64) ? (UINT64_MAX) : ((((uint64_t)1) << QLC_CHUNK_SIZE) - 1);
@@ -1857,6 +1918,9 @@ static uint64_t ssd_read(struct ssd *ssd, NvmeRequest *req)
         {
             sublat = slc_read(ssd, chunk_id, slc_bitmap, req->stime);
 
+            ssd->stat->slc_read_cnt_lpn += count_bits(slc_bitmap);
+            ssd->stat->slc_read_cnt_ppn += count_bits(slc_bitmap);
+
             maxlat = (sublat > maxlat) ? sublat : maxlat;
         }
 
@@ -1864,17 +1928,71 @@ static uint64_t ssd_read(struct ssd *ssd, NvmeRequest *req)
         {
             sublat = qlc_read(ssd, chunk_id, bitmap & (~slc_bitmap), req->stime);
 
+            ssd->stat->qlc_read_cnt_lpn += count_bits(bitmap & (~slc_bitmap));
+
             maxlat = (sublat > maxlat) ? sublat : maxlat;
         }
     }
 
+    stat->tt_rlats_us += maxlat;
+    stat->tt_rreq_cnt ++;
+    stat->tt_lats_us += maxlat;
+    stat->tt_req_cnt ++;
+
     return maxlat;
 }
 
-static void debug_print(struct ssd *ssd)
+/* 
+ * \brief 每秒钟会调用一次
+ */
+static void ftl_1s_timer(struct ssd *ssd)
 {
-    // struct ftl_statistics *stat = ssd->stat;
-    // ftl_flog("usr_rd=%lu, slc_rd=%lu, qlc_rd=%lu\n", stat->user_read_cnt_lpn, stat->slc_read_cnt, stat->qlc_read_cnt);
+    if (ssd == NULL)
+    {
+        ftl_flog("[%s]: ssd is NULL\n", __FUNCTION__);
+        return;
+    }
+
+    struct ftl_statistics *stat = ssd->stat;
+    if (stat == NULL)
+    {
+        ftl_flog("[%s]: stat is NULL\n", __FUNCTION__);
+        return ;
+    }
+
+    /* 计算统计值 */
+    uint32_t bw = stat->avg_bw_kb_s;    // 带宽
+    uint32_t rbw = stat->avg_rbw_kb_s;
+    uint32_t wbw = stat->avg_wbw_kb_s;
+
+    double lat = (stat->tt_req_cnt) ? stat->tt_lats_us * 1.0 / stat->tt_req_cnt : 0;     // 延迟
+    double rlat = (stat->tt_rreq_cnt) ? stat->tt_rlats_us * 1.0 / stat->tt_rreq_cnt : 0;
+    double wlat = (stat->tt_wreq_cnt) ? stat->tt_wlats_us * 1.0 / stat->tt_wreq_cnt : 0;
+
+
+    /* 计数器清零 */
+    stat->avg_bw_kb_s = 0;
+    stat->avg_rbw_kb_s = 0;
+    stat->avg_wbw_kb_s = 0;
+
+    stat->tt_lats_us = 0;
+    stat->tt_rlats_us = 0;
+    stat->tt_wlats_us = 0;
+    stat->tt_req_cnt = 0;
+    stat->tt_rreq_cnt = 0;
+    stat->tt_wreq_cnt = 0;
+
+    /* 每秒输出带宽和延迟 */
+    ftl_flog("%u, %u, %u, ", bw, rbw, wbw); // 带宽
+    ftl_flog("%.3lf, %.3lf, %.3lf, ", lat, rlat, wlat); // 延迟
+    ftl_flog("%lu, ", stat->user_read_cnt_lpn); // 读请求计数
+    ftl_flog("%lu, %lu, ", stat->slc_read_cnt_lpn, stat->slc_read_cnt_ppn);
+    ftl_flog("%lu, %lu, ", stat->qlc_read_cnt_lpn, stat->qlc_read_cnt_ppn);
+    ftl_flog("%lu, ", stat->qlc_cross_page_read_cnt);
+    ftl_flog("%lu, ", stat->user_write_cnt_lpn); // 写请求计数
+    ftl_flog("%lu, %lu, ", stat->slc_write_cnt_lpn, stat->slc_write_cnt_ppn);
+    ftl_flog("%lu, %lu, ", stat->qlc_write_cnt_lpn, stat->qlc_write_cnt_ppn);
+    ftl_flog("%lu, %lu\n", stat->qlc_gc_from_slc_ppn, stat->qlc_gc_from_qlc_ppn);   // GC计数
 }
 
 static void *ftl_thread(void *arg)
@@ -1901,7 +2019,7 @@ static void *ftl_thread(void *arg)
         gettimeofday(&current_time, NULL);
         long seconds = (current_time.tv_sec - last_time.tv_sec);
         if (seconds >= 1) {
-            debug_print(ssd);
+            ftl_1s_timer(ssd);
             last_time = current_time;
         }
         for (i = 1; i <= n->num_poller; i++) {
@@ -1969,7 +2087,7 @@ void ftl_flog(const char *format, ...)
     va_end(args);
 }
 
-static void ftl_print_time(struct ssd *ssd)
+static void ftl_print_time(void)
 {
     // 获取当前日历时间（从1970年1月1日UTC至今的秒数）
     time_t current_time = time(NULL);
