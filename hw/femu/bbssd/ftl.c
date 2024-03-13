@@ -14,34 +14,21 @@ static void ftl_print_time(void);
 static void ftl_print_para(struct ssd *ssd);
 
 static void ftl_1s_timer(struct ssd *ssd);
-static uint32_t count_bits(uint32_t num);
+static uint32_t count_bits(uint64_t num);
 
-const uint8_t bitCountTable[256] = {
-    0, 1, 1, 2, 1, 2, 2, 3, 1, 2, 2, 3, 2, 3, 3, 4,
-    1, 2, 2, 3, 2, 3, 3, 4, 2, 3, 3, 4, 3, 4, 4, 5,
-    1, 2, 2, 3, 2, 3, 3, 4, 2, 3, 3, 4, 3, 4, 4, 5,
-    2, 3, 3, 4, 3, 4, 4, 5, 3, 4, 4, 5, 4, 5, 5, 6,
-    1, 2, 2, 3, 2, 3, 3, 4, 2, 3, 3, 4, 3, 4, 4, 5,
-    2, 3, 3, 4, 3, 4, 4, 5, 3, 4, 4, 5, 4, 5, 5, 6,
-    2, 3, 3, 4, 3, 4, 4, 5, 3, 4, 4, 5, 4, 5, 5, 6,
-    3, 4, 4, 5, 4, 5, 5, 6, 4, 5, 5, 6, 5, 6, 6, 7,
-    1, 2, 2, 3, 2, 3, 3, 4, 2, 3, 3, 4, 3, 4, 4, 5,
-    2, 3, 3, 4, 3, 4, 4, 5, 3, 4, 4, 5, 4, 5, 5, 6,
-    2, 3, 3, 4, 3, 4, 4, 5, 3, 4, 4, 5, 4, 5, 5, 6,
-    3, 4, 4, 5, 4, 5, 5, 6, 4, 5, 5, 6, 5, 6, 6, 7,
-    2, 3, 3, 4, 3, 4, 4, 5, 3, 4, 4, 5, 4, 5, 5, 6,
-    3, 4, 4, 5, 4, 5, 5, 6, 4, 5, 5, 6, 5, 6, 6, 7,
-    3, 4, 4, 5, 4, 5, 5, 6, 4, 5, 5, 6, 5, 6, 6, 7,
-    4, 5, 5, 6, 5, 6, 6, 7, 5, 6, 6, 7, 6, 7, 7, 8
-};
 
-/* 为了提升效率，这里直接采用查表法； */
-static uint32_t count_bits(uint32_t num)
+static uint32_t count_bits(uint64_t num)
 {
     int count = 0;
-    for (int i = 0; i < 4; ++i) {
-        count += bitCountTable[(num >> (i * 8)) & 0xFF];
+    
+    for (int i = 0; i < QLC_CHUNK_SIZE; ++i)
+    {
+        if (num & (1 << i))
+        {
+            count ++;
+        }
     }
+
     return count;
 }
 
@@ -119,9 +106,9 @@ static inline void set_slc_maptbl_ent(struct ssd *ssd, uint64_t lpn, struct ppa 
  */
 static inline void set_slc_maptbl_ent_state(struct ssd *ssd, uint64_t lpn, bool is_clean)
 {
-    struct ftl_mptl_slc_entry *entry = &ssd->maptbl->slc_l2p[lpn / QLC_CHUNK_SIZE];
-    ftl_assert(lpn < TT_LPNS);
-    entry->is_clean = is_clean;
+    // struct ftl_mptl_slc_entry *entry = &ssd->maptbl->slc_l2p[lpn / QLC_CHUNK_SIZE];
+    // ftl_assert(lpn < TT_LPNS);
+    // entry->is_clean = is_clean;
 }
 
 static uint64_t ppa2pgidx(struct ssd_region *region, struct ppa *ppa)
@@ -536,7 +523,7 @@ static void ssd_init_maptbl(struct ssd *ssd)
     ssd->maptbl->slc_l2p = g_malloc0(sizeof(struct ftl_mptl_slc_entry) * TT_CHUNKS);
     for (int i = 0; i < TT_CHUNKS; ++i)
     {
-        ssd->maptbl->slc_l2p[i].is_clean = true;
+        // ssd->maptbl->slc_l2p[i].is_clean = true;
         for (int j = 0; j < QLC_CHUNK_SIZE; ++j)
         {
             ssd->maptbl->slc_l2p[i].ppa[j].ppa = UNMAPPED_PPA;
@@ -859,9 +846,10 @@ static void mark_page_invalid(struct ssd_region *region, struct ppa *ppa)
 
     /* update corresponding page status */
     pg = get_pg(region, ppa);
-    if (pg->status == PG_INVALID) return;
-    ftl_assert(pg->status != PG_FREE);
-    // ftl_assert(pg->status == PG_VALID);
+    // if (pg->status == PG_INVALID) return;
+    // if (pg->status == PG_FREE) return;
+    // ftl_assert(pg->status != PG_FREE);
+    ftl_assert(pg->status == PG_VALID);
     pg->status = PG_INVALID;
 
     /* update corresponding block status */
@@ -1148,6 +1136,7 @@ static void copy_line_slc2qlc(struct ssd *ssd, struct line *victim_line)
             slc_ppa.g.pl = 0;
             for (int pg = 0; pg < slc_sp->pgs_per_blk; pg ++)
             {
+                slc_ppa.g.pg = pg;
                 pagep = get_pg(slc, &slc_ppa);
                 if (pagep->status == PG_VALID)
                 {
@@ -1174,15 +1163,28 @@ static void copy_line_slc2qlc(struct ssd *ssd, struct line *victim_line)
         residual_check = 0;
         cnt_chunk_len = 0;
         alignment = 0;
-        for (int offset = 0; offset < QLC_CHUNK_SIZE; ++offset)
+
+        if (!slc_entry->is_clean)
         {
-            if (mapped_ppa(&slc_entry->ppa[offset]))
+            for (int offset = 0; offset < QLC_CHUNK_SIZE; ++offset)
             {
-                slc_bitmap |= (((uint64_t)1) << offset);
-                gc_read_page(slc, &slc_entry->ppa[offset]);
-                qlc_entry->nbytes[offset] = slc_entry->nbytes[offset];
-                ssd->stat->qlc_gc_from_slc_ppn ++;
+                if (mapped_ppa(&slc_entry->ppa[offset]))
+                {
+                    slc_bitmap |= (((uint64_t)1) << offset);
+                    gc_read_page(slc, &slc_entry->ppa[offset]);
+                    qlc_entry->nbytes[offset] = slc_entry->nbytes[offset];
+                    ssd->stat->qlc_gc_from_slc_ppn ++;
+
+                    mark_page_invalid(ssd->slc, &slc_entry->ppa[offset]);
+                    set_rmap_ent(ssd->slc, INVALID_LPN, &slc_entry->ppa[offset]);
+
+                    slc_entry->ppa[offset].ppa = UNMAPPED_PPA;
+                }
             }
+        }
+        else
+        {
+            assert(0); // 暂时把clean flag关了
         }
 
         qlc_read(ssd, chunk_id, qlc_bitmap & (~slc_bitmap), 0);
@@ -1192,6 +1194,9 @@ static void copy_line_slc2qlc(struct ssd *ssd, struct line *victim_line)
         aligned_size = calculate_aligned_size(qlc_entry->nbytes);
 
         qlc_entry->valid_bitmap = slc_bitmap | qlc_bitmap;
+
+        struct ppa last_ppa;
+        last_ppa.ppa = INVALID_PPA;
 
         /* 写新的数据 old_bitmap | new_bitmap LPN数量 */
         for (int i = 0; i < QLC_CHUNK_SIZE; ++i)
@@ -1204,11 +1209,13 @@ static void copy_line_slc2qlc(struct ssd *ssd, struct line *victim_line)
 
             lpn = chunk_id * QLC_CHUNK_SIZE + i;
             qlc_ppa = qlc_entry->ppa[i];
-            if (qlc_bitmap & (1 << i)) {
+            if ((qlc_ppa.ppa != UNMAPPED_PPA) && (qlc_bitmap & (1 << i)) &&!same_ppa(&last_ppa, &qlc_ppa) ) {
                 // 设置旧chunk无效
                 mark_page_invalid(ssd->qlc, &qlc_ppa); 
                 // 反向映射更新（置无效），全部都是chunkid
                 set_rmap_ent(ssd->qlc, INVALID_LPN, &qlc_ppa);
+
+                last_ppa.ppa = qlc_ppa.ppa;
             }
 
             /* FIXME:加入压缩拼接的逻辑 */
@@ -1250,6 +1257,7 @@ static void copy_line_slc2qlc(struct ssd *ssd, struct line *victim_line)
         qlc_entry->len = cnt_chunk_len;
     }
 
+    slc_ppa.g.blk = victim_line->id;
     for (int ch = 0; ch < slc_sp->nchs; ch++) {
         for (int lun = 0; lun < slc_sp->luns_per_ch; lun++) {
             slc_ppa.g.ch = ch;
@@ -1299,6 +1307,7 @@ static void copy_line_qlc2qlc(struct ssd *ssd, struct line *victim_line)
             qlc_ppa.g.lun = lun;
             qlc_ppa.g.pl = 0;
             for (int pg = 0; pg < qlc_sp->pgs_per_blk; pg ++) {
+                qlc_ppa.g.pg = pg;
                 pagep = get_pg(qlc, &qlc_ppa);
                 if (pagep->status == PG_VALID)
                 {
@@ -1333,15 +1342,25 @@ static void copy_line_qlc2qlc(struct ssd *ssd, struct line *victim_line)
                 slc_bitmap |= (((uint64_t)1) << offset);
                 gc_read_page(ssd->slc, &slc_entry->ppa[offset]);
                 qlc_entry->nbytes[offset] = slc_entry->nbytes[offset];
-                ssd->stat->qlc_gc_from_qlc_ppn ++;
+                ssd->stat->qlc_gc_from_slc_ppn ++;
+
+                mark_page_invalid(ssd->slc, &slc_entry->ppa[offset]);
+                set_rmap_ent(ssd->slc, INVALID_LPN, &slc_entry->ppa[offset]);
+
+                slc_entry->ppa[offset].ppa = UNMAPPED_PPA;
             }
         }
+
+        ssd->stat->qlc_gc_from_qlc_ppn += count_bits(qlc_bitmap & (~slc_bitmap));
 
         qlc_read(ssd, chunk_id, qlc_bitmap & (~slc_bitmap), 0);
         max_size = max_aligned_size();
         aligned_size = calculate_aligned_size(qlc_entry->nbytes);
 
         qlc_entry->valid_bitmap = slc_bitmap | qlc_bitmap;
+
+        struct ppa last_ppa;
+        last_ppa.ppa = INVALID_PPA;
 
         /* 写新的数据 old_bitmap | new_bitmap LPN数量 */
         for (int i = 0; i < QLC_CHUNK_SIZE; ++i)
@@ -1354,11 +1373,13 @@ static void copy_line_qlc2qlc(struct ssd *ssd, struct line *victim_line)
 
             lpn = chunk_id * QLC_CHUNK_SIZE + i;
             qlc_ppa = qlc_entry->ppa[i];
-            if (qlc_bitmap & (1 << i)) {
+            if ((qlc_ppa.ppa != UNMAPPED_PPA) && (qlc_bitmap & (1 << i)) &&!same_ppa(&last_ppa, &qlc_ppa) ) {
                 // 设置旧chunk无效
                 mark_page_invalid(ssd->qlc, &qlc_ppa);
                 // 反向映射更新（置无效），全部都是chunkid
                 set_rmap_ent(ssd->qlc, INVALID_LPN, &qlc_ppa);
+
+                last_ppa.ppa = qlc_ppa.ppa;
             }
 
             /* FIXME:加入压缩拼接的逻辑 */
@@ -1400,6 +1421,7 @@ static void copy_line_qlc2qlc(struct ssd *ssd, struct line *victim_line)
         qlc_entry->len = cnt_chunk_len;
     }
 
+    qlc_ppa.g.blk = victim_line->id;
     for (int ch = 0; ch < qlc_sp->nchs; ch++) {
         for (int lun = 0; lun < qlc_sp->luns_per_ch; lun++) {
             qlc_ppa.g.ch = ch;
@@ -1560,7 +1582,7 @@ static uint64_t qlc_write(struct ssd *ssd, uint64_t chunk_id, uint64_t bitmap, u
     uint64_t maxlat = 0;
     int r = 0;
     struct ftl_mptl_qlc_entry *entry = NULL;
-    struct ppa ppa;
+    struct ppa ppa, last_ppa;
     // bool need_read = false;
     int lens = QLC_CHUNK_SIZE;
     int lpn = chunk_id * QLC_CHUNK_SIZE;
@@ -1580,6 +1602,7 @@ static uint64_t qlc_write(struct ssd *ssd, uint64_t chunk_id, uint64_t bitmap, u
     if ((lpn / QLC_CHUNK_SIZE) != ((lpn + lens - 1) / QLC_CHUNK_SIZE)) // 跨越了chunk
     {
         ftl_flog("[Error] %s: lpn=%lu, lens=%u, QLC_CHUNK_SIZE=%d\n", __FUNCTION__, lpn, lens, QLC_CHUNK_SIZE);
+
         return 50;
     }
 
@@ -1620,10 +1643,12 @@ static uint64_t qlc_write(struct ssd *ssd, uint64_t chunk_id, uint64_t bitmap, u
 
     entry->valid_bitmap = old_bitmap | new_bitmap;
 
+    last_ppa.ppa = INVALID_PPA;
+
     /* 写新的数据 old_bitmap | new_bitmap LPN数量 */
-    for (int i = 0; i < lens; ++i)
+    for (int i = 0; i < QLC_CHUNK_SIZE; ++i)
     {
-        if (((1 << i) & entry->valid_bitmap) == 0)
+        if (((1ULL << i) & entry->valid_bitmap) == 0)
         {
             set_qlc_maptbl_ent(ssd, lpn, NULL);
             continue;
@@ -1631,11 +1656,13 @@ static uint64_t qlc_write(struct ssd *ssd, uint64_t chunk_id, uint64_t bitmap, u
 
         lpn = chunk_id * QLC_CHUNK_SIZE + i;
         ppa = entry->ppa[i];
-        if (old_bitmap & (1 << i)) {
+        assert(ppa.ppa != INVALID_PPA);
+        if (old_bitmap & (1 << i) && !same_ppa(&last_ppa, &ppa)) {
             // 设置旧chunk无效
             mark_page_invalid(ssd->qlc, &ppa); // 需要修改？
             // 反向映射更新（置无效），全部都是chunkid
             set_rmap_ent(ssd->qlc, INVALID_LPN, &ppa);
+            last_ppa.ppa = ppa.ppa;
         }
 
         /* FIXME:加入压缩拼接的逻辑 */
@@ -1696,10 +1723,11 @@ static uint64_t qlc_write(struct ssd *ssd, uint64_t chunk_id, uint64_t bitmap, u
  */
 static uint64_t slc_write(struct ssd *ssd, uint64_t lpn, uint64_t stime)
 {
-    struct ftl_mptl_slc_entry *entry = NULL;
+    struct ftl_mptl_slc_entry *slc_entry = NULL;
+    // struct ftl_mptl_qlc_entry *qlc_entry = NULL;
     uint64_t lcn = lpn / QLC_CHUNK_SIZE;
     int offset_in_chunk = lpn % QLC_CHUNK_SIZE;
-    uint32_t nbytes = 0; // LPN压缩后的字节数（体现压缩率）
+    uint32_t nbytes = generate_length(); // LPN压缩后的字节数（体现压缩率）
     struct ppa ppa;      // 存放物理地址
     int r = 0;           // 调用其他函数的返回值
     int lat;             // 延迟，本函数的返回值
@@ -1714,14 +1742,27 @@ static uint64_t slc_write(struct ssd *ssd, uint64_t lpn, uint64_t stime)
         }
     }
 
-    entry = get_slc_maptbl_ent(ssd, lcn);   // 获取slc映射条目（chunk）
-    if (mapped_ppa(&entry->ppa[offset_in_chunk]))
+    slc_entry = get_slc_maptbl_ent(ssd, lcn);   // 获取slc映射条目（chunk）
+    if (mapped_ppa(&slc_entry->ppa[offset_in_chunk]))
     {
-        ppa = entry->ppa[offset_in_chunk];
+        ppa = slc_entry->ppa[offset_in_chunk];
 
         /* 更新旧的物理页信息 */
         mark_page_invalid(ssd->slc, &ppa);
         set_rmap_ent(ssd->slc, INVALID_LPN, &ppa);
+
+        /* 删除chunk映射的条目 */
+        // qlc_entry = get_qlc_maptbl_ent(ssd, lcn);
+        // if (qlc_entry->ppa[offset_in_chunk] != UNMAPPED_PPA)
+        // {
+        //     ppa = qlc_entry->ppa[offset_in_chunk];
+
+        //     mark_page_invalid(ssd->qlc, &ppa);
+        //     set_rmap_ent(ssd->qlc, INVALID_LPN, &ppa);
+
+        //     qlc_entry->
+        // }
+        
     }
 
     /* 从slc获取新的ppa */
@@ -1803,10 +1844,17 @@ static uint64_t ssd_write(struct ssd *ssd, NvmeRequest *req)
             /* slc部分全部置无效 */
             slc_entry = get_slc_maptbl_ent(ssd, chunk_id);
             for (int i = 0; i < QLC_CHUNK_SIZE; i++) {
-                if(slc_entry->ppa[i].ppa != UNMAPPED_PPA){
+                if(slc_entry->ppa[i].ppa != UNMAPPED_PPA) {
                     mark_page_invalid(ssd->slc, &slc_entry->ppa[i]);
+
+                    set_rmap_ent(ssd->slc, INVALID_LPN, &slc_entry->ppa[i]);
+                    
+                    slc_entry->ppa[i].ppa = UNMAPPED_PPA;
+                    
+                    // slc_entry->is_clean = true;
                 }
             }
+
             valid_map = UINT64_MAX; // 设定valid map为1
 
             curlat = qlc_write(ssd, chunk_id, valid_map, req->stime);
@@ -1824,7 +1872,7 @@ static uint64_t ssd_write(struct ssd *ssd, NvmeRequest *req)
 
             lpn += 1; // 处理下一个lpn
         }
-        // TODO: slc如果满了就拼接并迁移到QLC
+        // TODO: slc如果满了就拼接并迁移到QLC，这个功能先不管，直接放到
     }
 
     stat->tt_wlats_us += maxlat;
