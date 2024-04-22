@@ -7,14 +7,17 @@
 #define INVALID_LPN     (~(0ULL))
 #define UNMAPPED_PPA    (~(0ULL))
 
+#define CHUNK_MAPPING
+#define CHUNK_SIZE  (2)
+
 enum {
     NAND_READ =  0,
     NAND_WRITE = 1,
     NAND_ERASE = 2,
 
-    NAND_READ_LATENCY = 40000,
-    NAND_PROG_LATENCY = 200000,
-    NAND_ERASE_LATENCY = 2000000,
+    NAND_READ_LATENCY = 140000, // 140us
+    NAND_PROG_LATENCY = 2000000, // 2000us
+    NAND_ERASE_LATENCY = 15000000,  // 15000us
 };
 
 enum {
@@ -194,11 +197,25 @@ struct nand_cmd {
     int64_t stime; /* Coperd: request arrival time */
 };
 
+struct chunk_map_entry {
+    struct ppa ppas[CHUNK_SIZE];
+    bool bitmap[CHUNK_SIZE];
+};
+
+struct chunk_statistic {
+    uint32_t user_read_page;
+    uint32_t user_write_page;
+    uint32_t total_read_page;
+    uint32_t total_write_page;
+};
+
 struct ssd {
     char *ssdname;
     struct ssdparams sp;
     struct ssd_channel *ch;
     struct ppa *maptbl; /* page level mapping table */
+    struct chunk_map_entry *cmaptbl;    /* chunk level mapping table */
+    struct chunk_statistic *stat;
     uint64_t *rmap;     /* reverse mapptbl, assume it's stored in OOB */
     struct write_pointer wp;
     struct line_mgmt lm;
@@ -233,5 +250,7 @@ void ssd_init(FemuCtrl *n);
 #else
 #define ftl_assert(expression)
 #endif
+
+void ftl_flog(const char *format, ...);
 
 #endif
