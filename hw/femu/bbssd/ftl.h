@@ -8,16 +8,16 @@
 #define UNMAPPED_PPA    (~(0ULL))
 
 #define CHUNK_MAPPING
-#define CHUNK_SIZE  (2)
+#define CHUNK_SIZE  (16)
 
 enum {
     NAND_READ =  0,
     NAND_WRITE = 1,
     NAND_ERASE = 2,
 
-    NAND_READ_LATENCY = 140000, // 140us
-    NAND_PROG_LATENCY = 2000000, // 2000us
-    NAND_ERASE_LATENCY = 15000000,  // 15000us
+    NAND_READ_LATENCY = 14000, // 140us
+    NAND_PROG_LATENCY = 200000, // 2000us
+    NAND_ERASE_LATENCY = 1500000,  // 15000us
 };
 
 enum {
@@ -230,7 +230,7 @@ struct ssd {
 void ssd_init(FemuCtrl *n);
 
 #ifdef FEMU_DEBUG_FTL
-#define ftl_debug(fmt, ...) \
+#define ftl_debug(fmt, ...) \=
     do { printf("[FEMU] FTL-Dbg: " fmt, ## __VA_ARGS__); } while (0)
 #else
 #define ftl_debug(fmt, ...) \

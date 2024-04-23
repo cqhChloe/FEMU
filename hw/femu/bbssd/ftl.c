@@ -6,6 +6,7 @@ const char *femu_log_file_name = "/home/chenqihui/femu.log";
 FILE *femu_log_file = NULL;
 
 static void *ftl_thread(void *arg);
+static uint64_t ssd_warm(struct ssd *ssd);
 
 static void ftl_1s_timer(struct ssd *ssd)
 {
@@ -48,6 +49,7 @@ static inline void set_maptbl_ent(struct ssd *ssd, uint64_t lpn, struct ppa *ppa
     ftl_assert(lpn < ssd->sp.tt_pgs);
 #ifdef CHUNK_MAPPING
     ssd->cmaptbl[lpn / CHUNK_SIZE].ppas[lpn % CHUNK_SIZE] = *ppa;
+    ssd->cmaptbl[lpn / CHUNK_SIZE].bitmap[lpn % CHUNK_SIZE] = true;
 #else
     ssd->maptbl[lpn] = *ppa;
 #endif
@@ -442,6 +444,8 @@ void ssd_init(FemuCtrl *n)
 
     /* initialize write pointer, this is how we allocate new pages for writes */
     ssd_init_write_pointer(ssd);
+
+    ssd_warm(ssd);
 
     qemu_thread_create(&ssd->ftl_thread, "FEMU-FTL-Thread", ftl_thread, n,
                        QEMU_THREAD_JOINABLE);
@@ -866,6 +870,105 @@ static uint64_t ssd_read(struct ssd *ssd, NvmeRequest *req)
     return maxlat;
 }
 
+static uint64_t ssd_warm(struct ssd *ssd)
+{
+    struct ssdparams *spp = &ssd->sp;
+    uint64_t start_lpn = 0;
+    uint64_t end_lpn = 13107200;    // 50GB
+    struct ppa ppa;
+    uint64_t lpn;
+    int r;
+
+    if (end_lpn >= spp->tt_pgs) {
+        ftl_err("start_lpn=%"PRIu64",tt_pgs=%d\n", start_lpn, ssd->sp.tt_pgs);
+    }
+
+    while (should_gc_high(ssd)) {
+        /* perform GC here until !should_gc(ssd) */
+        r = do_gc(ssd, true);
+        if (r == -1)
+            break;
+    }
+
+    uint64_t start_chunk = start_lpn / CHUNK_SIZE;
+    uint64_t end_chunk = end_lpn / CHUNK_SIZE;
+    
+    for (uint64_t lcn = start_chunk; lcn <= end_chunk; ++lcn)
+    {
+        /* 先把旧的chunk读出来 */
+        for (uint32_t offset = 0; offset < CHUNK_SIZE; ++offset)
+        {
+            lpn = lcn * CHUNK_SIZE + offset;
+            ppa = get_maptbl_ent(ssd, lpn);
+            if (!mapped_ppa(&ppa) || !valid_ppa(ssd, &ppa)) {
+                continue;
+            }
+        }
+
+        /* 再写新的chunk */
+        for (uint32_t offset = 0; offset < CHUNK_SIZE; ++offset)
+        {
+            lpn = lcn * CHUNK_SIZE + offset;
+            if  (lpn > end_lpn)
+            {
+                if (ssd->cmaptbl[lcn].bitmap[offset])
+                {
+                    /* 写新的条目 */
+                    ppa = get_maptbl_ent(ssd, lpn);
+
+                    if (mapped_ppa(&ppa)) {
+                        /* update old page information first */
+                        mark_page_invalid(ssd, &ppa);
+                        set_rmap_ent(ssd, INVALID_LPN, &ppa);
+                    }
+
+                    /* new write */
+                    ppa = get_new_page(ssd);
+                    /* update maptbl */
+                    set_maptbl_ent(ssd, lpn, &ppa);
+                    /* update rmap */
+                    set_rmap_ent(ssd, lpn, &ppa);
+
+                    mark_page_valid(ssd, &ppa);
+
+                    /* need to advance the write pointer here */
+                    ssd_advance_write_pointer(ssd);
+                }
+                else
+                {
+                    ssd->cmaptbl[lcn].ppas[offset].ppa = INVALID_PPA;
+                    // assert(ssd->cmaptbl[lcn].ppas[offset].ppa == INVALID_PPA);
+                }
+            }
+            else
+            {
+                /* 写新的条目 */
+                ppa = get_maptbl_ent(ssd, lpn);
+
+                if (mapped_ppa(&ppa)) {
+                    /* update old page information first */
+                    mark_page_invalid(ssd, &ppa);
+                    set_rmap_ent(ssd, INVALID_LPN, &ppa);
+                }
+
+                /* new write */
+                ppa = get_new_page(ssd);
+                /* update maptbl */
+                set_maptbl_ent(ssd, lpn, &ppa);
+                /* update rmap */
+                set_rmap_ent(ssd, lpn, &ppa);
+
+                mark_page_valid(ssd, &ppa);
+
+                /* need to advance the write pointer here */
+                ssd_advance_write_pointer(ssd);
+            }
+        }
+    }
+
+    return 0;
+}
+
 static uint64_t ssd_write(struct ssd *ssd, NvmeRequest *req)
 {
     uint64_t lba = req->slba;
@@ -893,12 +996,33 @@ static uint64_t ssd_write(struct ssd *ssd, NvmeRequest *req)
 
     uint64_t start_chunk = start_lpn / CHUNK_SIZE;
     uint64_t end_chunk = end_lpn / CHUNK_SIZE;
+
+    bool new_bit_map[CHUNK_SIZE];       // 记录每个chunk需要写的lpn
     
     for (uint64_t lcn = start_chunk; lcn <= end_chunk; ++lcn)
     {
+        for (int i = 0; i < CHUNK_SIZE; ++i)
+        {
+            new_bit_map[i] = false;
+        }
+
+        for (uint32_t offset = 0; offset < CHUNK_SIZE; ++offset)
+        {
+            lpn = lcn * CHUNK_SIZE + offset;
+            if (lpn >= start_lpn && lpn <= end_lpn)
+            {
+                new_bit_map[offset] = true;
+            }
+        }
+
         /* 先把旧的chunk读出来 */
         for (uint32_t offset = 0; offset < CHUNK_SIZE; ++offset)
         {
+            if (new_bit_map[offset])    // 这次需要写的就不用读了
+            {
+                continue;
+            }
+
             lpn = lcn * CHUNK_SIZE + offset;
             ppa = get_maptbl_ent(ssd, lpn);
             if (!mapped_ppa(&ppa) || !valid_ppa(ssd, &ppa)) {
@@ -919,7 +1043,7 @@ static uint64_t ssd_write(struct ssd *ssd, NvmeRequest *req)
         for (uint32_t offset = 0; offset < CHUNK_SIZE; ++offset)
         {
             lpn = lcn * CHUNK_SIZE + offset;
-            if  (lpn > end_lpn)
+            if  (lpn > end_lpn || lpn < start_lpn)  // 这次不用写的
             {
                 if (ssd->cmaptbl[lcn].bitmap[offset])
                 {
@@ -993,13 +1117,10 @@ static uint64_t ssd_write(struct ssd *ssd, NvmeRequest *req)
 
 
                 ssd->stat->user_write_page ++;
+
                 ssd->stat->total_write_page ++;
             }
         }
-    }
-
-    for (lpn = start_lpn; lpn <= end_lpn; lpn++) {
-
     }
 
 #else
@@ -1033,7 +1154,7 @@ static uint64_t ssd_write(struct ssd *ssd, NvmeRequest *req)
     }
 #endif
 
-    return maxlat;
+    return maxlat + rmaxlat;
 }
 
 /*
